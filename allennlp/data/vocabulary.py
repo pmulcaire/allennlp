@@ -354,6 +354,8 @@ class Vocabulary:
         if token in self._token_to_index[namespace]:
             return self._token_to_index[namespace][token]
         else:
+            if self._oov_token not in self._token_to_index[namespace]:
+                import IPython as ipy; ipy.embed()
             return self._token_to_index[namespace][self._oov_token]
 
     def get_token_from_index(self, index: int, namespace: str = 'tokens') -> str:

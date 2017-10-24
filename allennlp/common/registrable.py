@@ -46,6 +46,7 @@ class Registrable:
                 message = "Cannot register %s as %s; name already in use for %s" % (
                         name, cls.__name__, registry[name].__name__)
                 raise ConfigurationError(message)
+            print("Added {} ({}) to registry".format(name, subclass))
             registry[name] = subclass
             return subclass
         return add_subclass_to_registry

@@ -121,7 +121,7 @@ class SimpleTagger(Model):
         Does a simple position-wise argmax over each token, converts indices to string labels, and
         adds a ``"tags"`` key to the dictionary with the result.
         """
-        all_predictions = output_dict['class_probabilities']
+        all_predictions = output_dict['class_probabilities'].data
         if not isinstance(all_predictions, numpy.ndarray):
             all_predictions = all_predictions.cpu().numpy()
         if all_predictions.ndim == 3:
@@ -136,7 +136,11 @@ class SimpleTagger(Model):
             all_tags.append(tags)
         if len(all_tags) == 1:
             all_tags = all_tags[0]  # type: ignore
-        output_dict['tags'] = all_tags
+        output_dict['tags'] = [all_tags]
+
+        if 'logits' in output_dict:
+            del output_dict['logits']
+
         return output_dict
 
     @overrides
@@ -149,12 +153,8 @@ class SimpleTagger(Model):
         text_field_embedder = TextFieldEmbedder.from_params(vocab, embedder_params)
         stacked_encoder = Seq2SeqEncoder.from_params(params.pop("stacked_encoder"))
 
-        init_params = params.pop('initializer', None)
-        reg_params = params.pop('regularizer', None)
-        initializer = (InitializerApplicator.from_params(init_params)
-                       if init_params is not None
-                       else InitializerApplicator())
-        regularizer = RegularizerApplicator.from_params(reg_params) if reg_params is not None else None
+        initializer = InitializerApplicator.from_params(params.pop('initializer', []))
+        regularizer = RegularizerApplicator.from_params(params.pop('regularizer', []))
 
         return cls(vocab=vocab,
                    text_field_embedder=text_field_embedder,

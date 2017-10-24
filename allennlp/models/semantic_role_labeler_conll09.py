@@ -17,7 +17,7 @@ from allennlp.nn.util import get_lengths_from_binary_sequence_mask, viterbi_deco
 from allennlp.training.metrics import SpanBasedF1Measure
 
 
-@Model.register("srl")
+@Model.register("srl09")
 class SemanticRoleLabeler(Model):
     """
     This model performs semantic role labeling using BIO tags using Propbank semantic roles.
@@ -26,7 +26,7 @@ class SemanticRoleLabeler(Model):
 
     This implementation is effectively a series of stacked interleaved LSTMs with highway
     connections, applied to embedded sequences of words concatenated with a binary indicator
-    containing whether or not a word is the verbal predicate to generate predictions for in
+    containing whether or not a word is the predicate to generate predictions for in
     the sentence. Additionally, during inference, Viterbi decoding is applied to constrain
     the predictions to contain valid BIO sequences.
 
@@ -40,7 +40,7 @@ class SemanticRoleLabeler(Model):
         The encoder (with its own internal stacking) that we will use in between embedding tokens
         and predicting output tags.
     binary_feature_dim : int, required.
-        The dimensionality of the embedding of the binary verb predicate features.
+        The dimensionality of the embedding of the binary predicate features.
     initializer : ``InitializerApplicator``, optional (default=``InitializerApplicator()``)
         Used to initialize the model parameters.
     regularizer : ``RegularizerApplicator``, optional (default=``None``)
@@ -59,18 +59,19 @@ class SemanticRoleLabeler(Model):
         self.num_classes = self.vocab.get_vocab_size("labels")
 
         # For the span based evaluation, we don't want to consider labels
-        # for verb, because the verb index is provided to the model.
+        # for the predicate, because the predicate index is provided to the model.
         self.span_metric = SpanBasedF1Measure(vocab, tag_namespace="labels", ignore_classes=["V"])
 
         self.stacked_encoder = stacked_encoder
-        # There are exactly 2 binary features for the verb predicate embedding.
+        # There are exactly 2 binary features for the predicate embedding.
         self.binary_feature_embedding = Embedding(2, binary_feature_dim)
         self.tag_projection_layer = TimeDistributed(Linear(self.stacked_encoder.get_output_dim(),
                                                            self.num_classes))
         self.embedding_dropout = Dropout(p=embedding_dropout)
 
         if text_field_embedder.get_output_dim() + binary_feature_dim != stacked_encoder.get_input_dim():
-            raise ConfigurationError("The SRL Model uses a binary verb indicator feature, meaning "
+            import IPython as ipy; ipy.embed()
+            raise ConfigurationError("The SRL Model uses a binary predicate indicator feature, meaning "
                                      "the input dimension of the stacked_encoder must be equal to "
                                      "the output dimension of the text_field_embedder + 1.")
 
@@ -78,7 +79,7 @@ class SemanticRoleLabeler(Model):
 
     def forward(self,  # type: ignore
                 tokens: Dict[str, torch.LongTensor],
-                verb_indicator: torch.LongTensor,
+                pred_indicator: torch.LongTensor,
                 tags: torch.LongTensor = None) -> Dict[str, torch.Tensor]:
         # pylint: disable=arguments-differ
         """
@@ -93,10 +94,10 @@ class SemanticRoleLabeler(Model):
             sequence.  The dictionary is designed to be passed directly to a ``TextFieldEmbedder``,
             which knows how to combine different word representations into a single vector per
             token in your input.
-        verb_indicator: torch.LongTensor, required.
-            An integer ``SequenceFeatureField`` representation of the position of the verb
+        pred_indicator: torch.LongTensor, required.
+            An integer ``SequenceFeatureField`` representation of the position of the predicate
             in the sentence. This should have shape (batch_size, num_tokens) and importantly, can be
-            all zeros, in the case that the sentence has no verbal predicate.
+            all zeros, in the case that the sentence has no predicate.
         tags : torch.LongTensor, optional (default = None)
             A torch tensor representing the sequence of integer gold class labels
             of shape ``(batch_size, num_tokens)``
@@ -116,11 +117,11 @@ class SemanticRoleLabeler(Model):
         """
         embedded_text_input = self.embedding_dropout(self.text_field_embedder(tokens))
         mask = get_text_field_mask(tokens)
-        embedded_verb_indicator = self.binary_feature_embedding(verb_indicator.long())
-        # Concatenate the verb feature onto the embedded text. This now
+        embedded_pred_indicator = self.binary_feature_embedding(pred_indicator.long())
+        # Concatenate the predicate feature onto the embedded text. This now
         # has shape (batch_size, sequence_length, embedding_dim + binary_feature_dim).
-        embedded_text_with_verb_indicator = torch.cat([embedded_text_input, embedded_verb_indicator], -1)
-        batch_size, sequence_length, embedding_dim_with_binary_feature = embedded_text_with_verb_indicator.size()
+        embedded_text_with_pred_indicator = torch.cat([embedded_text_input, embedded_pred_indicator], -1)
+        batch_size, sequence_length, embedding_dim_with_binary_feature = embedded_text_with_pred_indicator.size()
 
         if self.stacked_encoder.get_input_dim() != embedding_dim_with_binary_feature:
             raise ConfigurationError("The SRL model uses an indicator feature, which makes "
@@ -128,7 +129,7 @@ class SemanticRoleLabeler(Model):
                                      "specified. Therefore, the 'input_dim' of the stacked_encoder "
                                      "must be equal to total_embedding_dim + 1.")
 
-        encoded_text = self.stacked_encoder(embedded_text_with_verb_indicator, mask)
+        encoded_text = self.stacked_encoder(embedded_text_with_pred_indicator, mask)
 
         logits = self.tag_projection_layer(encoded_text)
         reshaped_log_probs = logits.view(-1, self.num_classes)
@@ -212,8 +213,12 @@ class SemanticRoleLabeler(Model):
         stacked_encoder = Seq2SeqEncoder.from_params(params.pop("stacked_encoder"))
         binary_feature_dim = params.pop("binary_feature_dim")
 
-        initializer = InitializerApplicator.from_params(params.pop('initializer', []))
-        regularizer = RegularizerApplicator.from_params(params.pop('regularizer', []))
+        init_params = params.pop('initializer', None)
+        reg_params = params.pop('regularizer', None)
+        initializer = (InitializerApplicator.from_params(init_params)
+                       if init_params is not None
+                       else InitializerApplicator())
+        regularizer = RegularizerApplicator.from_params(reg_params) if reg_params is not None else None
 
         return cls(vocab=vocab,
                    text_field_embedder=text_field_embedder,
@@ -224,12 +229,12 @@ class SemanticRoleLabeler(Model):
 
 def write_to_conll_eval_file(prediction_file: TextIO,
                              gold_file: TextIO,
-                             verb_index: Optional[int],
+                             pred_index: Optional[int],
                              sentence: List[str],
                              prediction: List[str],
                              gold_labels: List[str]):
     """
-    Prints predicate argument predictions and gold labels for a single verbal
+    Prints predicate argument predictions and gold labels for a single 
     predicate in a sentence to two provided file references.
 
     Parameters
@@ -238,10 +243,10 @@ def write_to_conll_eval_file(prediction_file: TextIO,
         A file reference to print predictions to.
     gold_file : TextIO, required.
         A file reference to print gold labels to.
-    verb_index : Optional[int], required.
-        The index of the verbal predicate in the sentence which
+    pred_index : Optional[int], required.
+        The index of the predicate in the sentence which
         the gold labels are the arguments for, or None if the sentence
-        contains no verbal predicate.
+        contains no predicate.
     sentence : List[str], required.
         The word tokens.
     prediction : List[str], required.
@@ -249,14 +254,14 @@ def write_to_conll_eval_file(prediction_file: TextIO,
     gold_labels : List[str], required.
         The gold BIO labels.
     """
-    verb_only_sentence = ["-"] * len(sentence)
-    if verb_index:
-        verb_only_sentence[verb_index] = sentence[verb_index]
+    pred_only_sentence = ["-"] * len(sentence)
+    if pred_index:
+        pred_only_sentence[pred_index] = sentence[pred_index]
 
     conll_format_predictions = convert_bio_tags_to_conll_format(prediction)
     conll_format_gold_labels = convert_bio_tags_to_conll_format(gold_labels)
 
-    for word, predicted, gold in zip(verb_only_sentence,
+    for word, predicted, gold in zip(pred_only_sentence,
                                      conll_format_predictions,
                                      conll_format_gold_labels):
         prediction_file.write(word.ljust(15))

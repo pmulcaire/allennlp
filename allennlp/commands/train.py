@@ -26,6 +26,7 @@ import os
 import sys
 from copy import deepcopy
 
+from allennlp.commands.evaluate import evaluate
 from allennlp.common.checks import ensure_pythonhashseed_set
 from allennlp.common.params import Params
 from allennlp.common.tee_logger import TeeLogger
@@ -36,7 +37,6 @@ from allennlp.data.iterators.data_iterator import DataIterator
 from allennlp.models.archival import archive_model
 from allennlp.models.model import Model
 from allennlp.training.trainer import Trainer
-from allennlp.commands.evaluate import evaluate
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
@@ -74,6 +74,7 @@ def train_model_from_file(parameter_filename: str, serialization_dir: str) -> Mo
     serialization_dir: str, required
         The directory in which to save results and logs.
     """
+
     # We need the python hashseed to be set if we're training a model
     ensure_pythonhashseed_set()
 

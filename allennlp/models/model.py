@@ -113,12 +113,15 @@ class Model(torch.nn.Module, Registrable):
                                           add_batch_dimension=True,
                                           cuda_device=cuda_device,
                                           for_training=False)
-        outputs = self.decode(self.forward(**model_input))
+        forward_tensors = self.forward(**model_input)
+        outputs = self.decode(forward_tensors)
 
         for name, output in list(outputs.items()):
             output = output[0]
             if isinstance(output, torch.autograd.Variable):
                 output = output.data.cpu().numpy()
+            elif isinstance(output, torch.Tensor):
+                output = output.cpu().numpy()
             outputs[name] = output
         return outputs
 
