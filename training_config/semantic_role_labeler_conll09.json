@@ -1,14 +1,14 @@
 {
   "dataset_reader":{"type":"srl09"},
-  "train_data_path": "/homes/gws/pmulc/data/conll2009languages/cat/train.altered.conll",
-  "validation_data_path": "/homes/gws/pmulc//data/conll2009languages/cat/dev.altered.conll",
+  "train_data_path": "/home/pmulc/data/conll2009languages/cat/train.altered.conll",
+  "validation_data_path": "/home/pmulc//data/conll2009languages/cat/dev.altered.conll",
   "model": {
     "type": "srl09",
     "text_field_embedder": {
       "tokens": {
         "type": "embedding",
-        "embedding_dim": 300,
-        "pretrained_file": "/homes/gws/pmulc/data/embeddings/glove/cat.prefixed.glv.300.embs.gz",
+        "embedding_dim": 100,
+        "pretrained_file": "/home/pmulc/data/embeddings/cat.prefixed.glv.300.embs.gz",
         "trainable": true
       }
     },
@@ -22,7 +22,7 @@
     ],
     "stacked_encoder": {
       "type": "alternating_lstm",
-      "input_size": 400,
+      "input_size": 200,
       "hidden_size": 300,
       "num_layers": 8,
       "recurrent_dropout_probability": 0.1,
@@ -37,11 +37,11 @@
   },
 
   "trainer": {
-    "num_epochs": 2,
+    "num_epochs": 100,
     "grad_clipping": 1.0,
     "patience": 20,
     "validation_metric": "+f1-measure-overall",
-    "cuda_device": 0,
+    "cuda_device": -1,
     "optimizer": {
       "type": "adadelta",
       "rho": 0.95

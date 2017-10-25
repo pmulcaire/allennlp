@@ -221,11 +221,11 @@ def _read_pretrained_embedding_file(embeddings_filename: str,
                 # embedding_misses_file and at the model summary to make sure things look
                 # like they are supposed to.
                 logger.warning("Found line with wrong number of dimensions "
-                               "(expected %d, was %d): %s", embedding_dim, 
+                               "(expected %d or %d, was %d): %s", embedding_dim, expected_length,
                                len(fields) - 1, ' '.join(fields[:10]) + '[...]')
                 try:
                     n1 = float(fields[1]) # test that the second field is a number
-                    assert len(fields)-1 < embedding_dim # test that we could take a subset of the line
+                    assert len(fields)-1 > embedding_dim # test that we could take a subset of the line
                     # if these tests pass, print a warning but use the vector and allow 
                     # future vectors with the same length.
                     # NOTE TK TODO REMOVE: in future replace this by allowing user to specify
