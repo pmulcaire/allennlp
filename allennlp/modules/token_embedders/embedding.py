@@ -209,9 +209,10 @@ def _read_pretrained_embedding_file(embeddings_filename: str,
     # First we read the embeddings from the file, only keeping vectors for the words we need.
     logger.info("Reading embeddings from file")
     with gzip.open(cached_path(embeddings_filename), 'rb') as embeddings_file:
+        expected_length = embedding_dim
         for line in embeddings_file:
             fields = line.decode('utf-8').strip().split(' ')
-            if len(fields) - 1 != embedding_dim:
+            if len(fields)-1 != embedding_dim and len(fields)-1 != expected_length:
                 # Sometimes there are funny unicode parsing problems that lead to different
                 # fields lengths (e.g., a word with a unicode space character that splits
                 # into more than one column).  We skip those lines.  Note that if you have
@@ -219,12 +220,25 @@ def _read_pretrained_embedding_file(embeddings_filename: str,
                 # skipped.  It's hard to check for that here; you just have to look in the
                 # embedding_misses_file and at the model summary to make sure things look
                 # like they are supposed to.
-                logger.warning("Found line with wrong number of dimensions (expected %d, was %d): %s",
-                               embedding_dim, len(fields) - 1, line)
-                continue
+                logger.warning("Found line with wrong number of dimensions "
+                               "(expected %d, was %d): %s", embedding_dim, 
+                               len(fields) - 1, ' '.join(fields[:10]) + '[...]')
+                try:
+                    n1 = float(fields[1]) # test that the second field is a number
+                    assert len(fields)-1 < embedding_dim # test that we could take a subset of the line
+                    # if these tests pass, print a warning but use the vector and allow 
+                    # future vectors with the same length.
+                    # NOTE TK TODO REMOVE: in future replace this by allowing user to specify
+                    # both the 'actual' and 'desired' input embedding dimension.
+                    logger.warning("Will change expected_length to %s and allow this and "
+                                   "similar vectors", len(fields)-1)
+                    expected_length = len(fields)-1
+                except:
+                    logger.warning("Skipping...")
+                    continue
             word = fields[0]
             if word in words_to_keep:
-                vector = numpy.asarray(fields[1:], dtype='float32')
+                vector = numpy.asarray(fields[1:embedding_dim+1], dtype='float32')
                 embeddings[word] = vector
 
     if not embeddings:
