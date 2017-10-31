@@ -106,7 +106,7 @@ def make_app(build_dir: str = None) -> Sanic:
             log_blob["outputs"]["best_span_str"] = prediction["best_span_str"]
         elif model_name == "textual-entailment":
             log_blob["outputs"]["label_probs"] = prediction["label_probs"]
-        elif model_name == "semantic-role-labeling":
+        elif model_name == "semantic-role-labeling" or model_name == "semantic-role-labeling-09":
             verbs = []
 
             for verb in prediction["verbs"]:

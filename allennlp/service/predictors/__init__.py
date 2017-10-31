@@ -9,6 +9,7 @@ a ``Predictor`` that wraps it.
 from .predictor import Predictor
 from .bidaf import BidafPredictor
 from .decomposable_attention import DecomposableAttentionPredictor
-from .semantic_role_labeler import SemanticRoleLabelerPredictor
+#from .semantic_role_labeler import SemanticRoleLabelerPredictor
+from .semantic_role_labeler_conll09 import SemanticRoleLabelerPredictor
 from .simple_tagger import SimpleTaggerPredictor
 from .crf_tagger import CrfTaggerPredictor
