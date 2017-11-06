@@ -40,6 +40,5 @@ class DatasetReader(Registrable):
         """
         Static method that constructs the dataset reader described by ``params``.
         """
-        #import IPython as ipy; ipy.embed()
         choice = params.pop_choice('type', cls.list_available())
         return cls.by_name(choice).from_params(params)

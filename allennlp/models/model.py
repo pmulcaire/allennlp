@@ -16,6 +16,8 @@ from allennlp.nn.regularizers import RegularizerApplicator
 import numpy
 import torch
 
+import IPython as ipy
+
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
 # When training a model, many sets of weights are saved. By default we want to

@@ -11,6 +11,8 @@ import os
 
 import tqdm
 
+import IPython as ipy
+
 from allennlp.common.util import namespace_match
 from allennlp.common.params import Params
 from allennlp.common.checks import ConfigurationError
@@ -21,6 +23,7 @@ DEFAULT_PADDING_TOKEN = "@@PADDING@@"
 DEFAULT_OOV_TOKEN = "@@UNKNOWN@@"
 NAMESPACE_PADDING_FILE = 'non_padded_namespaces.txt'
 
+import IPython as ipy
 
 class _NamespaceDependentDefaultDict(defaultdict):
     """
@@ -355,7 +358,8 @@ class Vocabulary:
             return self._token_to_index[namespace][token]
         else:
             if self._oov_token not in self._token_to_index[namespace]:
-                import IPython as ipy; ipy.embed()
+                print("OOV token missing in allennlp/data/vocabulary.py")
+                ipy.embed()
             return self._token_to_index[namespace][self._oov_token]
 
     def get_token_from_index(self, index: int, namespace: str = 'tokens') -> str:

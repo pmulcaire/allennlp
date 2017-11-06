@@ -16,6 +16,8 @@ from allennlp.data.instance import Instance
 from allennlp.data.token_indexers import SingleIdTokenIndexer, TokenIndexer
 from allennlp.data.tokenizers import Token
 
+import IPython as ipy
+
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
 
@@ -122,7 +124,8 @@ class SrlReader(DatasetReader):
     def _process_sentence(self,
                           sentence_tokens: List[str],
                           predicates: List[int],
-                          predicate_argument_labels: List[List[str]]) -> List[Instance]:
+                          predicate_argument_labels: List[List[str]],
+                          sentence_id: int) -> List[Instance]:
         """
         Parameters
         ----------
@@ -145,15 +148,19 @@ class SrlReader(DatasetReader):
             # Sentence contains no predicates.
             tags = ["O" for _ in sentence_tokens]
             pred_label = [0 for _ in sentence_tokens]
-            return [self.text_to_instance(tokens, pred_label, tags)]
+            instances = [self.text_to_instance(tokens, pred_label, tags, sentence_id)]
         else:
             instances = []
             for pred_index, annotation in zip(predicates, predicate_argument_labels):
                 tags = annotation
                 pred_label = [0 for _ in sentence_tokens]
                 pred_label[pred_index] = 1
-                instances.append(self.text_to_instance(tokens, pred_label, tags))
-            return instances
+                instance = self.text_to_instance(tokens, pred_label, tags, sentence_id)
+                instances.append(instance)
+        instance_count = len(instances)
+        for instance in instances:
+            instance.instance_count = instance_count
+        return instances
 
     @overrides
     def read(self, file_path: str):
@@ -165,6 +172,7 @@ class SrlReader(DatasetReader):
         sentence: List[str] = []
         predicates: List[int] = []
         predicate_argument_labels: List[List[str]] = []
+        sentence_count = 0
 
         logger.info("Reading SRL instances from dataset file(s) at: %s", file_path)
         if os.path.isfile(file_path):
@@ -172,7 +180,7 @@ class SrlReader(DatasetReader):
             files = [(os.path.dirname(file_path), [], [file_path])]
         else:
             files = list(os.walk(file_path))
-        #import IPython as ipy; ipy.embed()
+
         for root, _, data_files in tqdm.tqdm(files):
             for data_file in data_files:
                 if not data_file.endswith("conll"):
@@ -185,16 +193,26 @@ class SrlReader(DatasetReader):
                     for line in open_file:
                         line = line.strip()
                         if line == '' or line.startswith("#"):
-
                             # Conll format data begins and ends with lines containing a hash,
                             # which may or may not occur after an empty line. To deal with this
                             # we check if the sentence is empty or not and if it is, we just skip
                             # adding instances, because there aren't any to add.
                             if not sentence:
                                 continue
-                            instances.extend(self._process_sentence(sentence,
-                                                                    predicates,
-                                                                    predicate_argument_labels))
+                            cur_instances = self._process_sentence(sentence,
+                                                                   predicates,
+                                                                   predicate_argument_labels,
+                                                                   sentence_count)
+                            instances.extend(cur_instances)
+                            try:
+                                assert instances[-1].sentence_id == sentence_count or len(cur_instances) == 0
+                            except:
+                                print("Problem with instance/sentence_id in allennlp/data/dataset_readers/semantic_role_labeling_conll09.py")
+                                ipy.embed()
+                            sentence_count += 1
+                            #if sentence_count > 20:
+                            #    break
+
                             # Reset everything for the next sentence.
                             sentence = []
                             predicates = []
@@ -210,7 +228,7 @@ class SrlReader(DatasetReader):
                         if word_index == 0:
                             # We're starting a new sentence. Here we set up a list of lists
                             # for the I/O labels for the annotation for each predicate.
-                            predicate_argument_labels = [[] for _ in conll_components[14:-1]]
+                            predicate_argument_labels = [[] for _ in conll_components[14:]]
 
                         num_annotations = len(predicate_argument_labels)
                         is_predicate = False
@@ -241,6 +259,9 @@ class SrlReader(DatasetReader):
                         # This also has the side effect of ordering the predicates by 
                         # their location in the sentence, automatically aligning them 
                         # with the annotations.
+                        # TK TODO TOFIX REMOVE ETC
+                        # This assumes gold pred ID, though. If there was a "predicted pred ID column"
+                        # we should use that instead.
                         if conll_components[12] == "Y":
                             predicates.append(word_index)
 
@@ -249,12 +270,13 @@ class SrlReader(DatasetReader):
         if not instances:
             raise ConfigurationError("No instances were read from the given filepath {}. "
                                      "Is the path correct?".format(file_path))
+        logger.info("Read %d SRL instances from %d sentences in dataset file(s) at: %s", len(instances), sentence_count, file_path)
         return Dataset(instances)
 
     def text_to_instance(self,  # type: ignore
                          tokens: List[Token],
                          pred_label: List[int],
-                         tags: List[str] = None) -> Instance:
+                         tags: List[str] = None, sentence_id=None) -> Instance:
         """
         We take `pre-tokenized` input here, along with a predicate label.  The predicate label 
         should be a one-hot binary vector, the same length as the tokens, indicating the position
@@ -267,7 +289,13 @@ class SrlReader(DatasetReader):
         fields['pred_indicator'] = SequenceLabelField(pred_label, text_field)
         if tags:
             fields['tags'] = SequenceLabelField(tags, text_field)
-        return Instance(fields)
+        inst = Instance(fields)
+        if sentence_id is not None:
+            inst.sentence_id = sentence_id
+        else:
+            print("Problem with instance/sentence_id in allennlp/data/dataset_readers/semantic_role_labeling_conll09.py")
+            ipy.embed()
+        return inst
 
     @classmethod
     def from_params(cls, params: Params) -> 'SrlReader':

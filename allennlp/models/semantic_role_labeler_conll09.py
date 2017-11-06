@@ -16,6 +16,7 @@ from allennlp.nn.util import get_text_field_mask, sequence_cross_entropy_with_lo
 from allennlp.nn.util import get_lengths_from_binary_sequence_mask, viterbi_decode
 from allennlp.training.metrics import SpanBasedF1Measure
 
+import IPython as ipy
 
 @Model.register("srl09")
 class SemanticRoleLabeler(Model):
@@ -70,7 +71,6 @@ class SemanticRoleLabeler(Model):
         self.embedding_dropout = Dropout(p=embedding_dropout)
 
         if text_field_embedder.get_output_dim() + binary_feature_dim != stacked_encoder.get_input_dim():
-            import IPython as ipy; ipy.embed()
             raise ConfigurationError("The SRL Model uses a binary predicate indicator feature, meaning "
                                      "the input dimension of the stacked_encoder must be equal to "
                                      "the output dimension of the text_field_embedder + 1.")
@@ -178,6 +178,9 @@ class SemanticRoleLabeler(Model):
             # metrics, so we filter for them here.
             # TODO(Mark): This is fragile and should be replaced with some verbosity level in Trainer.
             return {x: y for x, y in metric_dict.items() if "overall" in x}
+        else:
+            # limit eval output too
+            return {x: y for x, y in metric_dict.items() if "overall" in x}
 
         return metric_dict
 
@@ -227,7 +230,7 @@ class SemanticRoleLabeler(Model):
                    initializer=initializer,
                    regularizer=regularizer)
 
-def write_to_conll_eval_file(prediction_file: TextIO,
+def write_to_conll_2012_eval_file(prediction_file: TextIO,
                              gold_file: TextIO,
                              pred_index: Optional[int],
                              sentence: List[str],
@@ -258,8 +261,8 @@ def write_to_conll_eval_file(prediction_file: TextIO,
     if pred_index:
         pred_only_sentence[pred_index] = sentence[pred_index]
 
-    conll_format_predictions = convert_bio_tags_to_conll_format(prediction)
-    conll_format_gold_labels = convert_bio_tags_to_conll_format(gold_labels)
+    conll_format_predictions = convert_bio_tags_to_conll_2012_format(prediction)
+    conll_format_gold_labels = convert_bio_tags_to_conll_2012_format(gold_labels)
 
     for word, predicted, gold in zip(pred_only_sentence,
                                      conll_format_predictions,
@@ -272,7 +275,7 @@ def write_to_conll_eval_file(prediction_file: TextIO,
     gold_file.write("\n")
 
 
-def convert_bio_tags_to_conll_format(labels: List[str]):
+def convert_bio_tags_to_conll_2012_format(labels: List[str]):
     """
     Converts BIO formatted SRL tags to the format required for evaluation with the
     official CONLL 2005 perl script. Spans are represented by bracketed labels,
@@ -312,3 +315,63 @@ def convert_bio_tags_to_conll_format(labels: List[str]):
             new_label = new_label + ")"
         conll_labels.append(new_label)
     return conll_labels
+
+def write_to_conll_2009_eval_file(prediction_file: TextIO,
+                                  gold_file: TextIO,
+                                  pred_indices: List[List[int]],
+                                  sentence: List[str],
+                                  predicted_tags: List[List[str]],
+                                  gold_tags: List[List[str]]):
+    """
+    Prints predicate argument predictions and optionally gold labels for a single 
+    predicate in a sentence to two provided file references.
+
+    Parameters
+    ----------
+    prediction_file : TextIO, required.
+        A file reference to print predictions to.
+    gold_file : TextIO, required.
+        A file reference to print gold labels to.
+    pred_index : Optional[int], required.
+        The index of the predicate in the sentence which
+        the gold labels are the arguments for, or None if the sentence
+        contains no predicate.
+    sentence : List[str], required.
+        The word tokens.
+    prediction : List[str], required.
+        The predicted BIO labels.
+    gold_labels : List[str], required.
+        The gold BIO labels.
+    """
+    pred_only_sentence = ["_"] * len(sentence)
+
+    for pred_index_set in pred_indices:
+        for pidx, val in enumerate(pred_index_set):
+            if val:
+                pred_only_sentence[pidx] = 'Y'
+
+    lines = []
+    for idx in range(len(sentence)):
+        word = sentence[idx].text
+        line = ["_"] * (14 + len(pred_indices))
+        line[0] = str(idx)
+        line[1], line[2], line[3] = word, word, word
+        if pred_only_sentence[idx] == 'Y':
+            line[12] = pred_only_sentence[idx]
+            line[13] = word.split(':')[-1] + '.01' # TODO TK actual predicate disambiguation?
+        for i, predicate_tags in enumerate(predicted_tags):
+            if predicate_tags[idx] != 'O':
+                tag = predicate_tags[idx]
+                line[14+i] = '-'.join(tag.split('-')[1:]) # remove the B- from the beginning of the tag
+        prediction_file.write('\t'.join(line)+'\n')
+        prediction_file.flush()
+        lines.append(line)
+        for i, predicate_tags in enumerate(gold_tags):
+            if predicate_tags[idx] != 'O':
+                tag = predicate_tags[idx]
+                line[14+i] = '-'.join(tag.split('-')[1:]) # remove the B- from the beginning of the tag
+        gold_file.write('\t'.join(line)+'\n')
+    prediction_file.write("\n")
+    gold_file.write("\n")
+
+

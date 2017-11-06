@@ -30,6 +30,7 @@ from allennlp.training.learning_rate_schedulers import LearningRateScheduler
 from allennlp.training.optimizers import Optimizer
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
+import IPython as ipy
 
 class TensorboardWriter:
     """
@@ -212,6 +213,7 @@ class Trainer:
                                          total=num_training_batches)
         self._last_log = time.time()
         batch_num = 0
+        logger.info("%d batches, %d total instances", num_training_batches, len(self._train_dataset.instances))
 
         logger.info("Training")
         for batch in train_generator_tqdm:

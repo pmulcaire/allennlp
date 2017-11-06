@@ -21,11 +21,12 @@ and report any metrics calculated by the model.
     --cuda_device CUDA_DEVICE
                             id of GPU to use (if any)
 """
-from typing import Dict, Any
+from typing import Dict, Any, TextIO
 import argparse
 import logging
-
 import tqdm
+import os
+from collections import defaultdict
 
 from allennlp.common.util import prepare_environment
 from allennlp.data import Dataset
@@ -34,6 +35,9 @@ from allennlp.data.iterators import DataIterator
 from allennlp.models.archival import load_archive
 from allennlp.models.model import Model
 from allennlp.nn.util import arrays_to_variables
+
+from allennlp.models.semantic_role_labeler_conll09 import write_to_conll_2009_eval_file
+import IPython as ipy
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
@@ -54,6 +58,10 @@ def add_subparser(parser: argparse._SubParsersAction) -> argparse.ArgumentParser
                            type=int,
                            default=-1,
                            help='id of GPU to use (if any)')
+    subparser.add_argument('--print_predictions',
+                           type=bool,
+                           default=False,
+                           help='whether to print CoNLL files containing the predicted and gold labelings')
     subparser.add_argument('-o', '--overrides',
                            type=str,
                            default="",
@@ -75,12 +83,55 @@ def evaluate(model: Model,
     generator_tqdm = tqdm.tqdm(generator, total=iterator.get_num_batches(dataset))
     for batch in generator_tqdm:
         tensor_batch = arrays_to_variables(batch, cuda_device, for_training=False)
-        model.forward(**tensor_batch)
+        model.forward(**tensor_batch) # stores TP/FN counts for get_metrics as a side-effect
         metrics = model.get_metrics()
         description = ', '.join(["%s: %.2f" % (name, value) for name, value in metrics.items()]) + " ||"
         generator_tqdm.set_description(description)
 
     return model.get_metrics()
+
+
+def evaluate_predict(model: Model,
+                     dataset: Dataset,
+                     iterator: DataIterator,
+                     cuda_device: int,
+                     predict_file: TextIO,
+                     gold_file: TextIO) -> Dict[str, Any]:
+    model.eval() #sets the model to evaluation mode--no dropout, batchnorm, other stuff?
+
+    logger.info("Iterating over dataset")
+    generator_tqdm = tqdm.tqdm(dataset.instances, total=len(dataset.instances))
+
+    # Recompile instances into sentences (each instance has only one predicate, but
+    #   multiple instances come from a single sentence and should be printed thus)
+    # Map sentence indices to values
+    all_words = {}
+    all_predicate_inds = defaultdict(list)
+    all_gold_tags = defaultdict(list)
+    all_predicted_tags = defaultdict(list)
+    for instance in generator_tqdm:
+        output = model.forward_on_instance(instance, cuda_device)
+        predicted_tags = output['tags']
+        gold_tags = instance.fields['tags'].labels
+        words = instance.fields['tokens'].tokens
+        pred_indices = instance.fields['pred_indicator'].labels
+        sid = instance.sentence_id
+        if sid in all_words:
+            assert all_words[sid] == words
+        else:
+            all_words[sid] = words
+        all_predicate_inds[sid].append(pred_indices)
+        all_gold_tags[sid].append(gold_tags)
+        all_predicted_tags[sid].append(predicted_tags)
+
+    for sid in all_words:
+        write_to_conll_2009_eval_file(predict_file, gold_file,
+                                      all_predicate_inds[sid],
+                                      all_words[sid],
+                                      all_predicted_tags[sid],
+                                      all_gold_tags[sid])
+
+    return True
 
 
 def evaluate_from_args(args: argparse.Namespace) -> Dict[str, Any]:
@@ -106,6 +157,12 @@ def evaluate_from_args(args: argparse.Namespace) -> Dict[str, Any]:
     iterator = DataIterator.from_params(config.pop("iterator"))
 
     metrics = evaluate(model, dataset, iterator, args.cuda_device)
+
+    if args.print_predictions:
+        directory = os.path.dirname(args.archive_file)
+        predict_file = open(os.path.join(directory, 'predictions.conll'), 'w')
+        gold_file = open(os.path.join(directory, 'gold.conll'), 'w')
+        predictions = evaluate_predict(model, dataset, iterator, args.cuda_device, predict_file, gold_file)
 
     logger.info("Finished evaluating.")
     logger.info("Metrics:")
