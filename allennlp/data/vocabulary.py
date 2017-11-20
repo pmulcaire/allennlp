@@ -283,6 +283,8 @@ class Vocabulary:
         Constructs a vocabulary given a :class:`.Dataset` and some parameters.  We count all of the
         vocabulary items in the dataset, then pass those counts, and the other parameters, to
         :func:`__init__`.  See that method for a description of what the other parameters do.
+        Only includes fields that need a mapping from string keys to ints; 'pred_indicator' for SRL
+        is excluded, for example.
         """
         logger.info("Fitting token dictionary from dataset.")
         namespace_token_counts: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))

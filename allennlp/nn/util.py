@@ -416,6 +416,60 @@ def sequence_cross_entropy_with_logits(logits: torch.FloatTensor,
         return per_batch_loss.sum() / num_non_empty_sequences
     return per_batch_loss
 
+def masked_cross_entropy(logits: torch.FloatTensor,
+                         targets: torch.LongTensor,
+                         mask: torch.FloatTensor,
+                         batch_average: bool = True) -> torch.FloatTensor:
+    """
+    Computes the cross entropy loss of a padded batch, weighted with respect to
+    a user provided tensor `mask` to mask out padding elements from the loss.
+    Compare to softmax & negative-log-likelihood loss from torch.nn.functional
+
+    Parameters
+    ----------
+    logits : ``torch.FloatTensor``, required.
+        A ``torch.FloatTensor`` of size (batch_size, max_num_classes) which
+        contains the unnormalized probability for each class for each instance.
+        If instances have different numbers of valid classes, each row of
+        `logits` is padded with zeros up to the maximum number of classes for
+        an instance in this batch.
+    targets : ``torch.LongTensor``, required.
+        A ``torch.LongTensor`` of size (batch, sequence_length) which contains the
+        index of the true class for each corresponding step.
+    mask : ``torch.FloatTensor``, required.
+        A ``torch.FloatTensor`` of size (batch, max_num_classes)
+    batch_average : bool, optional, (default = True).
+        A bool indicating whether the loss should be averaged across the batch,
+        or returned as a vector of losses per batch element.
+
+    Returns
+    -------
+    A torch.FloatTensor representing the cross entropy loss.
+    If ``batch_average == True``, the returned loss is a scalar.
+    If ``batch_average == False``, the returned loss is a vector of shape (batch_size,).
+
+    """
+    # shape : (batch * sequence_length, num_classes)
+    masked_logits = logits.clone()
+    log_probs = torch.nn.functional.softmax(masked_logits)
+
+    # Contribution to the negative log likelihood only comes from the exact indices
+    # of the targets, as the target distributions are one-hot. Here we use torch.gather
+    # to extract the indices of the num_classes dimension which contribute to the loss.
+    # shape : (batch * sequence_length, 1)
+    negative_log_likelihood = - torch.gather(log_probs_flat, dim=1, index=targets_flat)
+    # shape : (batch, sequence_length)
+    negative_log_likelihood = negative_log_likelihood_flat.view(*targets.size())
+    # shape : (batch, sequence_length)
+    negative_log_likelihood = negative_log_likelihood * weights.float()
+    # shape : (batch_size,)
+    per_batch_loss = negative_log_likelihood.sum(1) / (weights.sum(1).float() + 1e-13)
+
+    if batch_average:
+        num_non_empty_sequences = ((weights.sum(1) > 0).float().sum() + 1e-13)
+        return per_batch_loss.sum() / num_non_empty_sequences
+    return per_batch_loss
+
 
 def replace_masked_values(tensor: Variable, mask: Variable, replace_with: float) -> Variable:
     """

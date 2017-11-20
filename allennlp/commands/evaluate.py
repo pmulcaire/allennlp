@@ -107,11 +107,13 @@ def evaluate_predict(model: Model,
     # Map sentence indices to values
     all_words = {}
     all_predicate_inds = defaultdict(list)
+    all_gold_senses = defaultdict(list)
     all_gold_tags = defaultdict(list)
     all_predicted_tags = defaultdict(list)
     for instance in generator_tqdm:
         output = model.forward_on_instance(instance, cuda_device)
         predicted_tags = output['tags']
+        gold_senses = instance.fields['pred_sense'].label
         gold_tags = instance.fields['tags'].labels
         words = instance.fields['tokens'].tokens
         pred_indices = instance.fields['pred_indicator'].labels
@@ -121,12 +123,14 @@ def evaluate_predict(model: Model,
         else:
             all_words[sid] = words
         all_predicate_inds[sid].append(pred_indices)
+        all_gold_senses[sid].append(gold_senses)
         all_gold_tags[sid].append(gold_tags)
         all_predicted_tags[sid].append(predicted_tags)
 
     for sid in all_words:
         write_to_conll_2009_eval_file(predict_file, gold_file,
                                       all_predicate_inds[sid],
+                                      all_gold_senses[sid],
                                       all_words[sid],
                                       all_predicted_tags[sid],
                                       all_gold_tags[sid])

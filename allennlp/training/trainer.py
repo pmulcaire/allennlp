@@ -169,7 +169,7 @@ class Trainer:
         if self._grad_norm:
             clip_grad_norm(self._model.parameters(), self._grad_norm)
 
-    def _batch_loss(self, batch: torch.Tensor, for_training: bool) -> torch.Tensor:
+    def _batch_loss(self, batch: dict, for_training: bool) -> torch.Tensor:
         """
         Does a forward pass on the given batch and returns the ``loss`` value in the result.
         If ``for_training`` is `True` also applies regularization penalty.
@@ -392,7 +392,8 @@ class Trainer:
                 is_best_so_far = True
                 val_metrics = this_epoch_val_metric = None
 
-            self._save_checkpoint(epoch, validation_metric_per_epoch, is_best=is_best_so_far)
+            if is_best_so_far or epoch % 10 == 0:
+                self._save_checkpoint(epoch, validation_metric_per_epoch, is_best=is_best_so_far)
             self._metrics_to_tensorboard(epoch, train_metrics, val_metrics=val_metrics)
             self._metrics_to_console(train_metrics, val_metrics)
             self._update_learning_rate(epoch, val_metric=this_epoch_val_metric)

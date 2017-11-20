@@ -3,7 +3,11 @@ from typing import Dict, List, TextIO, Optional
 from overrides import overrides
 import torch
 from torch.nn.modules import Linear, Dropout
+from torch.nn.parameter import Parameter
+from torch.autograd.variable import Variable
 import torch.nn.functional as F
+import math
+import numpy as np
 
 from allennlp.common import Params
 from allennlp.common.checks import ConfigurationError
@@ -12,7 +16,7 @@ from allennlp.modules import Seq2SeqEncoder, TimeDistributed, TextFieldEmbedder
 from allennlp.modules.token_embedders import Embedding
 from allennlp.models.model import Model
 from allennlp.nn import InitializerApplicator, RegularizerApplicator
-from allennlp.nn.util import get_text_field_mask, sequence_cross_entropy_with_logits
+from allennlp.nn.util import get_text_field_mask, sequence_cross_entropy_with_logits, masked_cross_entropy
 from allennlp.nn.util import get_lengths_from_binary_sequence_mask, viterbi_decode
 from allennlp.training.metrics import SpanBasedF1Measure
 
@@ -58,6 +62,7 @@ class SemanticRoleLabeler(Model):
 
         self.text_field_embedder = text_field_embedder
         self.num_classes = self.vocab.get_vocab_size("labels")
+        self.num_senses = self.vocab.get_vocab_size("sense_labels")
 
         # For the span based evaluation, we don't want to consider labels
         # for the predicate, because the predicate index is provided to the model.
@@ -68,6 +73,13 @@ class SemanticRoleLabeler(Model):
         self.binary_feature_embedding = Embedding(2, binary_feature_dim)
         self.tag_projection_layer = TimeDistributed(Linear(self.stacked_encoder.get_output_dim(),
                                                            self.num_classes))
+        self.sense_weights = Parameter(torch.Tensor(self.num_senses, 
+                                                    self.stacked_encoder.get_output_dim()))
+        self.sense_bias = self.bias = Parameter(torch.Tensor(self.num_senses))
+        stdv = 1. / math.sqrt(self.sense_weights.size(1))
+        self.sense_weights.data.uniform_(-stdv, stdv)
+        self.sense_bias.data.uniform_(-stdv, stdv)
+
         self.embedding_dropout = Dropout(p=embedding_dropout)
 
         if text_field_embedder.get_output_dim() + binary_feature_dim != stacked_encoder.get_input_dim():
@@ -80,6 +92,8 @@ class SemanticRoleLabeler(Model):
     def forward(self,  # type: ignore
                 tokens: Dict[str, torch.LongTensor],
                 pred_indicator: torch.LongTensor,
+                pred_sense_set: torch.LongTensor,
+                pred_sense: torch.LongTensor = None,
                 tags: torch.LongTensor = None) -> Dict[str, torch.Tensor]:
         # pylint: disable=arguments-differ
         """
@@ -98,6 +112,10 @@ class SemanticRoleLabeler(Model):
             An integer ``SequenceFeatureField`` representation of the position of the predicate
             in the sentence. This should have shape (batch_size, num_tokens) and importantly, can be
             all zeros, in the case that the sentence has no predicate.
+        pred_sense_set: torch.LongTensor, required.
+            A torch tensor representing the indices for valid pred_sense predictions. 
+        pred_sense: torch.LongTensor, optional (default = None)
+            A torch tensor representing the integer gold sense labels of shape ``(batch_size, 1)``
         tags : torch.LongTensor, optional (default = None)
             A torch tensor representing the sequence of integer gold class labels
             of shape ``(batch_size, num_tokens)``
@@ -115,9 +133,9 @@ class SemanticRoleLabeler(Model):
             A scalar loss to be optimised.
 
         """
-        embedded_text_input = self.embedding_dropout(self.text_field_embedder(tokens))
-        mask = get_text_field_mask(tokens)
-        embedded_pred_indicator = self.binary_feature_embedding(pred_indicator.long())
+        embedded_text_input = self.embedding_dropout(self.text_field_embedder(tokens)) # (batch_size, sequence_length, embedding_size)
+        mask = get_text_field_mask(tokens) # (batch_size, sequence_length)
+        embedded_pred_indicator = self.binary_feature_embedding(pred_indicator.long()) # (batch_size, sequence_length, embedding_size)
         # Concatenate the predicate feature onto the embedded text. This now
         # has shape (batch_size, sequence_length, embedding_dim + binary_feature_dim).
         embedded_text_with_pred_indicator = torch.cat([embedded_text_input, embedded_pred_indicator], -1)
@@ -133,17 +151,86 @@ class SemanticRoleLabeler(Model):
 
         logits = self.tag_projection_layer(encoded_text)
         reshaped_log_probs = logits.view(-1, self.num_classes)
-        class_probabilities = F.softmax(reshaped_log_probs).view([batch_size, sequence_length, self.num_classes])
+        class_probabilities = F.softmax(reshaped_log_probs).view([batch_size, 
+                                                                  sequence_length, 
+                                                                  self.num_classes])
         output_dict = {"logits": logits, "class_probabilities": class_probabilities}
         if tags is not None:
-            loss = sequence_cross_entropy_with_logits(logits, tags, mask)
+            arg_loss = sequence_cross_entropy_with_logits(logits, tags, mask)
             self.span_metric(class_probabilities, tags, mask)
-            output_dict["loss"] = loss
+            output_dict["arg_loss"] = arg_loss
+
+        """----------------------------------------------------------------------------------------------------------------------"""
+
+        """
+        Get predicate sense predictions for the batch
+        PSL: pred sense lemma
+        PSD: pred sense disambiguation
+        """
+
+        # predicate sense encodings for valid senses
+        _, psl_inds = pred_indicator.max(1) # 1-D, shape (batch_size), values index sequence_length dimension
+        d0, d2 = encoded_text.size(0), encoded_text.size(2)
+        psl_inds_expanded = psl_inds.view(-1, 1, 1).expand(d0, 1, d2) # expand into shape (batch_size,1,embedding_size) for indexing
+        psl_encodings = encoded_text.gather(1, psl_inds_expanded) # (batch_size, embedding_size)
+
+        # create mask
+        psd_mask = pred_sense_set.data.gt(-1)
+
+        # select valid predicate sense embeddings
+        compact_size = pred_sense_set.data.size(1)
+        embedding_size = self.sense_weights.size(1)
+        valid_sets = []
+        valid_inds = []
+        for rowi in range(batch_size):
+            row_inds = Variable(pred_sense_set.data[rowi][psd_mask[rowi]].contiguous())
+            valid_set = self.sense_weights.index_select(0,row_inds)
+            if len(row_inds) < compact_size:
+                zeros = np.zeros((compact_size - row_inds.size(0), embedding_size))
+                emb_padding = Variable(torch.cuda.FloatTensor(zeros,device=self.dev_id))
+                valid_set = torch.cat([valid_set, emb_padding],0)
+                ind_negs = -np.ones((compact_size - row_inds.size(0),),np.int64)
+                ind_padding = Variable(torch.from_numpy(ind_negs).cuda(device=self.dev_id))
+                row_inds = torch.cat([row_inds, ind_padding],0)
+            valid_sets.append(valid_set)
+            valid_inds.append(row_inds)
+        sense_embs = torch.stack(valid_sets)
+        scatter_inds = torch.stack(valid_inds)
+
+        # project forward into logits
+        # (batch_size x compact_size)
+        psd_logits = torch.matmul(sense_embs, psl_encodings.permute(0,2,1))
+        # set padding values to negative infinity
+        negative_mask = Variable(torch.cuda.FloatTensor(psd_logits.size(), device=self.dev_id).zero_())
+        negative_mask[psd_mask.lt(1)] = -np.inf
+        masked_psd_logits = psd_logits + negative_mask
+        compact_psd_probabilities = F.softmax(masked_psd_logits.view(batch_size, compact_size))
+        psd_probabilities = compact_psd_probabilities #TODO FIX. project to full sense dimension, probably?
+        psd_logits.squeeze()
+        output_dict = {"psd_logits": psd_logits, "psd_probabilities": psd_probabilities}
+        
+        if pred_sense is not None: #i.e. we have a gold answer and can backprop the loss from our predictions
+            _, targets = torch.eq(scatter_inds,pred_sense).max(1)
+            try:
+                psd_loss = F.cross_entropy(psd_logits.view(batch_size, compact_size), targets, size_average=True)
+            except Exception as e:
+                print(e)
+                ipy.embed()
+            output_dict["psd_loss"] = psd_loss
+
+        # combine loss, for backprop interface
+        loss = arg_loss + psd_loss
+        #ipy.embed()
+        output_dict["loss"] = loss
+        #output_dict["loss"] = arg_loss
 
         # We need to retain the mask in the output dictionary
         # so that we can crop the sequences to remove padding
         # when we do viterbi inference in self.decode.
+        # Probably don't need the same for the PSD mask, but
+        # we'll get to that later.
         output_dict["mask"] = mask
+        #output_dict["psd_mask"] = psd_mask
         return output_dict
 
     @overrides
@@ -187,10 +274,15 @@ class SemanticRoleLabeler(Model):
     def get_viterbi_pairwise_potentials(self):
         """
         Generate a matrix of pairwise transition potentials for the BIO labels.
-        The only constraint implemented here is that I-XXX labels must be preceded
-        by either an identical I-XXX tag or a B-XXX tag. In order to achieve this
+        The main constraint implemented is that I-XXX labels must be preceded
+        by either an identical I-XXX tag or a B-XXX tag. To achieve this
         constraint, pairs of labels which do not satisfy this constraint have a
         pairwise potential of -inf.
+
+        Secondary constraints for predicate sense disambiguation: 
+        1) the predicate index must have a tag corresponding to one of the 
+           senses of the predicate.
+        2) other words should not get a predicate sense tag, only BIO arg tags.
 
         Returns
         -------
@@ -229,6 +321,17 @@ class SemanticRoleLabeler(Model):
                    binary_feature_dim=binary_feature_dim,
                    initializer=initializer,
                    regularizer=regularizer)
+
+    def cuda(self, device_id=None):
+        """Moves all model parameters and buffers to the GPU.
+
+        Arguments:
+            device_id (int, optional): if specified, all parameters will be
+                copied to that device
+        """
+        self.dev_id = device_id
+        return super(SemanticRoleLabeler, self).cuda()
+
 
 def write_to_conll_2012_eval_file(prediction_file: TextIO,
                              gold_file: TextIO,
@@ -319,6 +422,7 @@ def convert_bio_tags_to_conll_2012_format(labels: List[str]):
 def write_to_conll_2009_eval_file(prediction_file: TextIO,
                                   gold_file: TextIO,
                                   pred_indices: List[List[int]],
+                                  gold_senses: List[List[str]],
                                   sentence: List[str],
                                   predicted_tags: List[List[str]],
                                   gold_tags: List[List[str]]):
@@ -332,15 +436,17 @@ def write_to_conll_2009_eval_file(prediction_file: TextIO,
         A file reference to print predictions to.
     gold_file : TextIO, required.
         A file reference to print gold labels to.
-    pred_index : Optional[int], required.
+    gold_senses : List[List[str]]
+        The gold predicate senses.
+    pred_indices : Optional[int], required.
         The index of the predicate in the sentence which
         the gold labels are the arguments for, or None if the sentence
         contains no predicate.
     sentence : List[str], required.
         The word tokens.
-    prediction : List[str], required.
+    predicted_tags : List[str], required.
         The predicted BIO labels.
-    gold_labels : List[str], required.
+    gold_tags : List[str], required.
         The gold BIO labels.
     """
     pred_only_sentence = ["_"] * len(sentence)
@@ -354,11 +460,12 @@ def write_to_conll_2009_eval_file(prediction_file: TextIO,
     for idx in range(len(sentence)):
         word = sentence[idx].text
         line = ["_"] * (14 + len(pred_indices))
-        line[0] = str(idx)
-        line[1], line[2], line[3] = word, word, word
+        line[0] = str(idx+1)
+        line[1] = word
         if pred_only_sentence[idx] == 'Y':
             line[12] = pred_only_sentence[idx]
-            line[13] = word.split(':')[-1] + '.01' # TODO TK actual predicate disambiguation?
+            #line[13] = word.split(':')[-1] + '.01' # very poor heuristic for predicate sense disambiguation
+
         for i, predicate_tags in enumerate(predicted_tags):
             if predicate_tags[idx] != 'O':
                 tag = predicate_tags[idx]

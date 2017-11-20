@@ -5,13 +5,14 @@ from typing import Dict, List, Optional
 
 from overrides import overrides
 import tqdm
+from collections import defaultdict
 
 from allennlp.common import Params
 from allennlp.common.checks import ConfigurationError
 from allennlp.common.file_utils import cached_path
 from allennlp.data.dataset import Dataset
 from allennlp.data.dataset_readers.dataset_reader import DatasetReader
-from allennlp.data.fields import Field, TextField, SequenceLabelField
+from allennlp.data.fields import Field, TextField, SequenceLabelField, LabelField, ListField
 from allennlp.data.instance import Instance
 from allennlp.data.token_indexers import SingleIdTokenIndexer, TokenIndexer
 from allennlp.data.tokenizers import Token
@@ -123,7 +124,8 @@ class SrlReader(DatasetReader):
 
     def _process_sentence(self,
                           sentence_tokens: List[str],
-                          predicates: List[int],
+                          predicate_indices: List[int],
+                          predicate_senses: List[int],
                           predicate_argument_labels: List[List[str]],
                           sentence_id: int) -> List[Instance]:
         """
@@ -144,18 +146,21 @@ class SrlReader(DatasetReader):
 
         """
         tokens = [Token(t) for t in sentence_tokens]
-        if not predicates:
+        if not predicate_indices:
             # Sentence contains no predicates.
             tags = ["O" for _ in sentence_tokens]
             pred_label = [0 for _ in sentence_tokens]
-            instances = [self.text_to_instance(tokens, pred_label, tags, sentence_id)]
+            pred_sense = "_"
+            instances = [self.text_to_instance(tokens, pred_label, pred_sense, tags, sentence_id)]
         else:
             instances = []
-            for pred_index, annotation in zip(predicates, predicate_argument_labels):
+            for pred_index, pred_sense, annotation in zip(predicate_indices,
+                                                          predicate_senses,
+                                                          predicate_argument_labels):
                 tags = annotation
                 pred_label = [0 for _ in sentence_tokens]
                 pred_label[pred_index] = 1
-                instance = self.text_to_instance(tokens, pred_label, tags, sentence_id)
+                instance = self.text_to_instance(tokens, pred_label, pred_sense, tags, sentence_id)
                 instances.append(instance)
         instance_count = len(instances)
         for instance in instances:
@@ -171,8 +176,10 @@ class SrlReader(DatasetReader):
 
         sentence: List[str] = []
         predicates: List[int] = []
+        senses: List[str] = []
         predicate_argument_labels: List[List[str]] = []
         sentence_count = 0
+        token_to_senses = defaultdict(set)
 
         logger.info("Reading SRL instances from dataset file(s) at: %s", file_path)
         if os.path.isfile(file_path):
@@ -201,6 +208,7 @@ class SrlReader(DatasetReader):
                                 continue
                             cur_instances = self._process_sentence(sentence,
                                                                    predicates,
+                                                                   senses,
                                                                    predicate_argument_labels,
                                                                    sentence_count)
                             instances.extend(cur_instances)
@@ -210,12 +218,11 @@ class SrlReader(DatasetReader):
                                 print("Problem with instance/sentence_id in allennlp/data/dataset_readers/semantic_role_labeling_conll09.py")
                                 ipy.embed()
                             sentence_count += 1
-                            #if sentence_count > 20:
-                            #    break
 
                             # Reset everything for the next sentence.
                             sentence = []
                             predicates = []
+                            senses = []
                             predicate_argument_labels = []
                             continue
 
@@ -264,9 +271,20 @@ class SrlReader(DatasetReader):
                         # we should use that instead.
                         if conll_components[12] == "Y":
                             predicates.append(word_index)
+                            senses.append(conll_components[13])
+                            token_to_senses[word].add(conll_components[13])
 
-        #instances = instances[:5000]
-        #raise ConfigurationError
+        for instance in instances:
+            senses = []
+            if 1 in instance.fields['pred_indicator'].labels:
+                pred_ind = instance.fields['pred_indicator'].labels.index(1)
+                pred_token = instance.fields['tokens'].tokens[pred_ind]
+                for pred_sense in token_to_senses[pred_token.text]:
+                    senses.append(LabelField(pred_sense, label_namespace='sense_labels'))
+            else:
+                senses.append(LabelField('_', label_namespace='sense_labels')) #hopefully never relevant
+            instance.fields['pred_sense_set'] = ListField(senses)
+
         if not instances:
             raise ConfigurationError("No instances were read from the given filepath {}. "
                                      "Is the path correct?".format(file_path))
@@ -276,6 +294,7 @@ class SrlReader(DatasetReader):
     def text_to_instance(self,  # type: ignore
                          tokens: List[Token],
                          pred_label: List[int],
+                         pred_sense: str,
                          tags: List[str] = None, sentence_id=None) -> Instance:
         """
         We take `pre-tokenized` input here, along with a predicate label.  The predicate label 
@@ -289,6 +308,11 @@ class SrlReader(DatasetReader):
         fields['pred_indicator'] = SequenceLabelField(pred_label, text_field)
         if tags:
             fields['tags'] = SequenceLabelField(tags, text_field)
+
+        # for predicate sense disambiguation
+        # use name *_labels because we don't want an UNK or padding
+        fields['pred_sense'] = LabelField(pred_sense, label_namespace='sense_labels')
+
         inst = Instance(fields)
         if sentence_id is not None:
             inst.sentence_id = sentence_id

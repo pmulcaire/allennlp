@@ -1,0 +1,55 @@
+{
+    "dataset_reader": {
+        "type": "srl09"
+    },
+    "train_data_path": "/homes/gws/pmulc/data/conll2009languages/eng/train.altered.conll",
+    "validation_data_path": "/homes/gws/pmulc/data/conll2009languages/eng/dev.altered.conll",
+    "model": {
+        "type": "srl09",
+        "text_field_embedder": {
+            "tokens": {
+                "type": "embedding",
+                "embedding_dim": 100,
+                "pretrained_file": "/homes/gws/pmulc/data/embeddings/glove.6B.100d.prefixed.gz",
+                "trainable": true
+            }
+        },
+        "initializer": [
+            [
+                "tag_projection_layer.*weight",
+                {
+                    "type": "orthogonal"
+                }
+            ]
+        ],
+        "stacked_encoder": {
+            "type": "alternating_highway_lstm_cuda",
+            "input_size": 200,
+            "hidden_size": 300,
+            "num_layers": 8,
+            "recurrent_dropout_probability": 0.1,
+        },
+        "binary_feature_dim": 100
+    },
+    "iterator": {
+        "type": "bucket",
+        "sorting_keys": [
+            [
+                "tokens",
+                "num_tokens"
+            ]
+        ],
+        "batch_size": 80
+    },
+    "trainer": {
+        "num_epochs": 500,
+        "grad_clipping": 1.0,
+        "patience": 95,
+        "validation_metric": "+f1-measure-overall",
+        "cuda_device": 0,
+        "optimizer": {
+            "type": "adadelta",
+            "rho": 0.95
+        }
+    }
+}
