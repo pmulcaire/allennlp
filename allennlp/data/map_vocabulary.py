@@ -1,10 +1,10 @@
 """
-A Vocabulary maps strings to integers, allowing for strings to be mapped to an
+A MapVocabulary maps strings to integers, allowing for strings to be mapped to an
 out-of-vocabulary token.
 """
 
 from collections import defaultdict
-from typing import Any, Callable, Dict, Union, Sequence
+from typing import Any, Callable, Dict, Union, Sequence, List
 import codecs
 import logging
 import os
@@ -18,10 +18,9 @@ from allennlp.common.params import Params
 from allennlp.common.checks import ConfigurationError
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
-DEFAULT_NON_PADDED_NAMESPACES = ("*tags", "*labels", "*map")
-DEFAULT_PADDING_TOKEN = "@@PADDING@@"
-DEFAULT_OOV_TOKEN = "@@UNKNOWN@@"
-NAMESPACE_PADDING_FILE = 'non_padded_namespaces.txt'
+from allennlp.data.vocabulary import DEFAULT_NON_PADDED_NAMESPACES, DEFAULT_PADDING_TOKEN, DEFAULT_OOV_TOKEN, NAMESPACE_PADDING_FILE
+from allennlp.data.vocabulary import Vocabulary
+DEFAULT_MAP_NAMESPACES = ("*map")
 
 import IPython as ipy
 
@@ -31,7 +30,7 @@ class _NamespaceDependentDefaultDict(defaultdict):
     <https://docs.python.org/2/library/collections.html#collections.defaultdict>`_ where the
     default value is dependent on the key that is passed.
 
-    We use "namespaces" in the :class:`Vocabulary` object to keep track of several different
+    We use "namespaces" in the :class:`MapVocabulary` object to keep track of several different
     mappings from strings to integers, so that we have a consistent API for mapping words, tags,
     labels, characters, or whatever else you want, into integers.  The issue is that some of those
     namespaces (words and characters) should have integers reserved for padding and
@@ -92,9 +91,9 @@ class _IndexToTokenDefaultDict(_NamespaceDependentDefaultDict):
                                                        lambda: {})
 
 
-class Vocabulary:
+class MapVocabulary(Vocabulary):
     """
-    A Vocabulary maps strings to integers, allowing for strings to be mapped to an
+    A MapVocabulary maps strings to integers, allowing for strings to be mapped to an
     out-of-vocabulary token.
 
     Vocabularies are fit to a particular dataset, which we use to decide which tokens are
@@ -108,20 +107,20 @@ class Vocabulary:
 
     Parameters
     ----------
-    counter : ``Dict[str, Dict[str, int]]``, optional (default=``None``)
+    indexer : ``Dict[str, Dict[str, int]]``, optional (default=``None``)
         A collection of counts from which to initialize this vocabulary.  We will examine the
         counts and, together with the other parameters to this class, use them to decide which
         words are in-vocabulary.  If this is ``None``, we just won't initialize the vocabulary with
         anything.
     min_count : ``int``, optional (default=``1``)
-        When initializing the vocab from a counter, you can specify a minimum count, and every
+        When initializing the vocab from a indexer, you can specify a minimum count, and every
         token with a count less than this will not be added to the dictionary.  The default of
         ``1`` means that every word ever seen will be added.
     max_vocab_size : ``Union[int, Dict[str, int]]``, optional (default=``None``)
         If you want to cap the number of tokens in your vocabulary, you can do so with this
         parameter.  If you specify a single integer, every namespace will have its vocabulary fixed
         to be no larger than this.  If you specify a dictionary, then each namespace in the
-        ``counter`` can have a separate maximum vocabulary size.  Any missing key will have a value
+        ``indexer`` can have a separate maximum vocabulary size.  Any missing key will have a value
         of ``None``, which means no cap on the vocabulary size.
     non_padded_namespaces : ``Sequence[str]``, optional
         By default, we assume you are mapping word / character tokens to integers, and so you want
@@ -139,7 +138,7 @@ class Vocabulary:
         have to specify anything here.
     """
     def __init__(self,
-                 counter: Dict[str, Dict[str, int]] = None,
+                 indexer: Dict[str, Dict[str, Union[int, List[int]]]] = None,
                  min_count: int = 1,
                  max_vocab_size: Union[int, Dict[str, int]] = None,
                  non_padded_namespaces: Sequence[str] = DEFAULT_NON_PADDED_NAMESPACES) -> None:
@@ -154,20 +153,35 @@ class Vocabulary:
         self._index_to_token = _IndexToTokenDefaultDict(non_padded_namespaces,
                                                         self._padding_token,
                                                         self._oov_token)
-        if counter is not None:
-            for namespace in counter:
-                token_counts = list(counter[namespace].items())
-                token_counts.sort(key=lambda x: x[1], reverse=True)
+        if indexer is not None:
+            for namespace in indexer:
+                token_counts = list(indexer[namespace].items())
                 max_vocab = max_vocab_size.get(namespace)
-                if max_vocab:
-                    token_counts = token_counts[:max_vocab]
-                for token, count in token_counts:
-                    if count >= min_count:
-                        self.add_token_to_namespace(token, namespace)
+                #print("\nin MapVocabulary"); ipy.embed()
+                if isinstance(list(indexer[namespace].values())[0], list):
+                    token_counts.sort(key=lambda x: len(x[1]), reverse=True)
+                    if max_vocab:
+                        token_counts = token_counts[:max_vocab]
+                    
+                    #print("adding token to namespace with list of indices; namespace should be a map-related one")
+                    #ipy.embed()
+
+                    for token, indices in token_counts:
+                        try:
+                            self.add_token_to_map(token, indices, namespace)
+                        except:
+                            ipy.embed()
+                else:
+                    token_counts.sort(key=lambda x: x[1], reverse=True)
+                    if max_vocab:
+                        token_counts = token_counts[:max_vocab]
+                    for token, count in token_counts:
+                        if count >= min_count:
+                            self.add_token_to_namespace(token, namespace)
 
     def save_to_files(self, directory: str) -> None:
         """
-        Persist this Vocabulary to files so it can be reloaded later.
+        Persist this MapVocabulary to files so it can be reloaded later.
         Each namespace corresponds to one file.
 
         Parameters
@@ -183,18 +197,31 @@ class Vocabulary:
             for namespace_str in self._non_padded_namespaces:
                 print(namespace_str, file=namespace_file)
 
-        for namespace, mapping in self._index_to_token.items():
+        for namespace, mapping in self._token_to_index.items():
             # Each namespace gets written to its own file, in index order.
-            with codecs.open(os.path.join(directory, namespace + '.txt'), 'w', 'utf-8') as token_file:
+            with codecs.open(os.path.join(directory, namespace + '.txt'), 'w', 'utf-8') as namespace_file:
                 num_tokens = len(mapping)
-                start_index = 1 if mapping[0] == self._padding_token else 0
-                for i in range(start_index, num_tokens):
-                    print(mapping[i].replace('\n', '@@NEWLINE@@'), file=token_file)
+                if isinstance(list(mapping.values())[0], list):
+                    # map between namespaces; need to print the indices list
+                    for token in mapping:
+                        indices = [str(idx) for idx in self._token_to_index[namespace][token]]
+                        print(token + '\t' + ' '.join(indices), file=namespace_file)
+                else:
+                    # index is represented by line index
+                    mapping = self._index_to_token[namespace]
+                    try:
+                        start_index = 1 if mapping[0] == self._padding_token else 0
+                    except:
+                        print("\nError writing a non-map namespace\n")
+                        ipy.embed()
+                    for i in range(start_index, num_tokens):
+                        print(mapping[i].replace('\n', '@@NEWLINE@@'), file=namespace_file)
+
 
     @classmethod
-    def from_files(cls, directory: str) -> 'Vocabulary':
+    def from_files(cls, directory: str) -> 'MapVocabulary':
         """
-        Loads a ``Vocabulary`` that was serialized using ``save_to_files``.
+        Loads a ``MapVocabulary`` that was serialized using ``save_to_files``.
 
         Parameters
         ----------
@@ -205,7 +232,7 @@ class Vocabulary:
         with codecs.open(os.path.join(directory, NAMESPACE_PADDING_FILE), 'r', 'utf-8') as namespace_file:
             non_padded_namespaces = [namespace_str.strip() for namespace_str in namespace_file]
 
-        vocab = Vocabulary(non_padded_namespaces=non_padded_namespaces)
+        vocab = MapVocabulary(non_padded_namespaces=non_padded_namespaces)
 
         # Check every file in the directory.
         for namespace_filename in os.listdir(directory):
@@ -217,7 +244,10 @@ class Vocabulary:
             else:
                 is_padded = True
             filename = os.path.join(directory, namespace_filename)
-            vocab.set_from_file(filename, is_padded, namespace=namespace)
+            if '_map' in namespace:
+                vocab.map_from_file(filename, is_padded, namespace=namespace)
+            else:
+                vocab.set_from_file(filename, is_padded, namespace=namespace)
 
         return vocab
 
@@ -273,12 +303,49 @@ class Vocabulary:
         if is_padded:
             assert self._oov_token in self._token_to_index[namespace], "OOV token not found!"
 
+    def map_from_file(self,
+                      filename: str,
+                      is_padded: bool = True,
+                      oov_token: str = DEFAULT_OOV_TOKEN,
+                      namespace: str = "tokens"):
+        """
+        c.f. set_from_file()
+        """
+        if is_padded:
+            # didn't think about how to impelement this, not relevant
+            self._token_to_index[namespace] = {self._padding_token: [0]}
+            self._index_to_token[namespace] = {0: [self._padding_token]}
+        else:
+            self._token_to_index[namespace] = {}
+            self._index_to_token[namespace] = {}
+        with codecs.open(filename, 'r', 'utf-8') as input_file:
+            lines = input_file.read().split('\n')
+            # Be flexible about having final newline or not
+            if lines and lines[-1] == '':
+                lines = lines[:-1]
+            for i, line in enumerate(lines):
+                ls = line.strip().split()
+                token = ls[0]
+                values = ls[1:]
+                token = token.replace('@@NEWLINE@@', '\n')
+                if token == oov_token:
+                    token = self._oov_token
+                if token not in self._token_to_index[namespace]:
+                    self._token_to_index[namespace][token] = []
+                for value in values:
+                    self._token_to_index[namespace][token].append(value)
+                    if value not in self._index_to_token[namespace]:
+                        self._index_to_token[namespace][value] = []
+                    self._index_to_token[namespace][value].append(token)
+        if is_padded:
+            assert self._oov_token in self._token_to_index[namespace], "OOV token not found!"
+
     @classmethod
     def from_dataset(cls,
                      dataset,
                      min_count: int = 1,
                      max_vocab_size: Union[int, Dict[str, int]] = None,
-                     non_padded_namespaces: Sequence[str] = DEFAULT_NON_PADDED_NAMESPACES) -> 'Vocabulary':
+                     non_padded_namespaces: Sequence[str] = DEFAULT_NON_PADDED_NAMESPACES) -> 'MapVocabulary':
         """
         Constructs a vocabulary given a :class:`.Dataset` and some parameters.  We count all of the
         vocabulary items in the dataset, then pass those counts, and the other parameters, to
@@ -288,20 +355,26 @@ class Vocabulary:
         """
         logger.info("Fitting token dictionary from dataset.")
         namespace_token_counts: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
+        namespace_mappings: Dict[str, Dict[int,int]]
         for instance in tqdm.tqdm(dataset.instances):
             instance.count_vocab_items(namespace_token_counts)
+        #for instance in tqdm.tqdm(dataset.instances):
+        #    instance.set_mappings(namespace_mappings)
+        # within each instance, look at two fields and associate the index of one with the other
+        # e.g. tokens and predicate_sense_sets? or tokens and predicate senses, and build the set/list somewhere else?
+        # also need to add this to file I/O
 
-        return Vocabulary(counter=namespace_token_counts,
-                          min_count=min_count,
-                          max_vocab_size=max_vocab_size,
-                          non_padded_namespaces=non_padded_namespaces)
+        return MapVocabulary(indexer=namespace_token_counts,
+                             min_count=min_count,
+                             max_vocab_size=max_vocab_size,
+                             non_padded_namespaces=non_padded_namespaces)
 
     @classmethod
     def from_params(cls, params: Params, dataset=None):
         """
         There are two possible ways to build a vocabulary; from a
-        pre-existing dataset, using :func:`Vocabulary.from_dataset`, or
-        from a pre-saved vocabulary, using :func:`Vocabulary.from_files`.
+        pre-existing dataset, using :func:`MapVocabulary.from_dataset`, or
+        from a pre-saved vocabulary, using :func:`MapVocabulary.from_files`.
         This method wraps both of these options, allowing their specification
         from a ``Params`` object, generated from a JSON configuration file.
 
@@ -310,11 +383,11 @@ class Vocabulary:
         params: Params, required.
         dataset: Dataset, optional.
             If ``params`` doesn't contain a ``vocabulary_directory`` key,
-            the ``Vocabulary`` can be built directly from a ``Dataset``.
+            the ``MapVocabulary`` can be built directly from a ``Dataset``.
 
         Returns
         -------
-        A ``Vocabulary``.
+        A ``MapVocabulary``.
         """
         vocabulary_directory = params.pop("directory_path", None)
         if not vocabulary_directory and not dataset:
@@ -324,48 +397,46 @@ class Vocabulary:
             logger.info("Loading Vocab from files instead of dataset.")
 
         if vocabulary_directory:
-            params.assert_empty("Vocabulary - from files")
-            return Vocabulary.from_files(vocabulary_directory)
+            params.assert_empty("MapVocabulary - from files")
+            return MapVocabulary.from_files(vocabulary_directory)
 
         min_count = params.pop("min_count", 1)
         max_vocab_size = params.pop("max_vocab_size", None)
         non_padded_namespaces = params.pop("non_padded_namespaces", DEFAULT_NON_PADDED_NAMESPACES)
-        params.assert_empty("Vocabulary - from dataset")
-        return Vocabulary.from_dataset(dataset,
+        params.assert_empty("MapVocabulary - from dataset")
+        return MapVocabulary.from_dataset(dataset,
                                        min_count,
                                        max_vocab_size,
                                        non_padded_namespaces)
 
-    def add_token_to_namespace(self, token: str, namespace: str = 'tokens') -> int:
+
+    def add_token_to_map(self, token: str, indices: List[str], namespace: str, many2many: bool=True) -> int:
         """
-        Adds ``token`` to the index, if it is not already present.  Either way, we return the index of
-        the token.
+        Adds ``token`` to the vocabulary under each index in a list, for any indices where it is
+         not already present.
+        Either way, we return the list of indices of the token.
         """
+
         if not isinstance(token, str):
-            raise ValueError("Vocabulary tokens must be strings, or saving and loading will break."
+            raise ValueError("MapVocabulary tokens must be strings, or saving and loading will break."
                              "  Got %s (with type %s)" % (repr(token), type(token)))
         if token not in self._token_to_index[namespace]:
-            index = len(self._token_to_index[namespace])
-            self._token_to_index[namespace][token] = index
-            self._index_to_token[namespace][index] = token
-            return index
+            for index in indices:
+                if many2many:
+                    if index in self._index_to_token[namespace]:
+                        self._index_to_token[namespace][index].append(token)
+                    else:
+                        self._index_to_token[namespace][index] = [token]
+                else:
+                    if index in self._index_to_token[namespace]:
+                        old = self._index_to_token[namespace][index]
+                        print("warning: index {} already present in {} with token {}; ".format(index, namespace, old) + 
+                              "tried to add token {}".format(token))
+                        raise IndexError
+                    else:
+                        self._index_to_token[namespace][index] = token
+            self._token_to_index[namespace][token] = indices
+            return indices
         else:
             return self._token_to_index[namespace][token]
 
-    def get_index_to_token_vocabulary(self, namespace: str = 'tokens') -> Dict[int, str]:
-        return self._index_to_token[namespace]
-
-    def get_token_index(self, token: str, namespace: str = 'tokens') -> int:
-        if token in self._token_to_index[namespace]:
-            return self._token_to_index[namespace][token]
-        else:
-            if self._oov_token not in self._token_to_index[namespace]:
-                print("OOV token missing in allennlp/data/vocabulary.py")
-                ipy.embed()
-            return self._token_to_index[namespace][self._oov_token]
-
-    def get_token_from_index(self, index: int, namespace: str = 'tokens') -> str:
-        return self._index_to_token[namespace][index]
-
-    def get_vocab_size(self, namespace: str = 'tokens') -> int:
-        return len(self._token_to_index[namespace])

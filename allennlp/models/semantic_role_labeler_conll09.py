@@ -114,6 +114,8 @@ class SemanticRoleLabeler(Model):
             all zeros, in the case that the sentence has no predicate.
         pred_sense_set: torch.LongTensor, required.
             A torch tensor representing the indices for valid pred_sense predictions. 
+        pred_lemma: torch.LongTensor, required.
+            A torch tensor representing the indices for valid pred_sense predictions. 
         pred_sense: torch.LongTensor, optional (default = None)
             A torch tensor representing the integer gold sense labels of shape ``(batch_size, 1)``
         tags : torch.LongTensor, optional (default = None)
