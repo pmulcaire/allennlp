@@ -62,7 +62,7 @@ class SemanticRoleLabeler(Model):
 
         self.text_field_embedder = text_field_embedder
         self.num_classes = self.vocab.get_vocab_size("labels")
-        self.num_senses = self.vocab.get_vocab_size("sense_labels")
+        self.num_senses = self.vocab.get_vocab_size("senses")
 
         # For the span based evaluation, we don't want to consider labels
         # for the predicate, because the predicate index is provided to the model.
@@ -94,7 +94,8 @@ class SemanticRoleLabeler(Model):
                 pred_indicator: torch.LongTensor,
                 pred_sense_set: torch.LongTensor,
                 pred_sense: torch.LongTensor = None,
-                tags: torch.LongTensor = None) -> Dict[str, torch.Tensor]:
+                tags: torch.LongTensor = None,
+                calculate_loss: bool = True) -> Dict[str, torch.Tensor]:
         # pylint: disable=arguments-differ
         """
         Parameters
@@ -113,8 +114,6 @@ class SemanticRoleLabeler(Model):
             in the sentence. This should have shape (batch_size, num_tokens) and importantly, can be
             all zeros, in the case that the sentence has no predicate.
         pred_sense_set: torch.LongTensor, required.
-            A torch tensor representing the indices for valid pred_sense predictions. 
-        pred_lemma: torch.LongTensor, required.
             A torch tensor representing the indices for valid pred_sense predictions. 
         pred_sense: torch.LongTensor, optional (default = None)
             A torch tensor representing the integer gold sense labels of shape ``(batch_size, 1)``
@@ -157,12 +156,12 @@ class SemanticRoleLabeler(Model):
                                                                   sequence_length, 
                                                                   self.num_classes])
         output_dict = {"logits": logits, "class_probabilities": class_probabilities}
-        if tags is not None:
+        if tags is not None and calculate_loss:
             arg_loss = sequence_cross_entropy_with_logits(logits, tags, mask)
             self.span_metric(class_probabilities, tags, mask)
             output_dict["arg_loss"] = arg_loss
 
-        """----------------------------------------------------------------------------------------------------------------------"""
+        """-------------------------------------------------------------------------------------------------"""
 
         """
         Get predicate sense predictions for the batch
@@ -209,9 +208,11 @@ class SemanticRoleLabeler(Model):
         compact_psd_probabilities = F.softmax(masked_psd_logits.view(batch_size, compact_size))
         psd_probabilities = compact_psd_probabilities #TODO FIX. project to full sense dimension, probably?
         psd_logits.squeeze()
-        output_dict = {"psd_logits": psd_logits, "psd_probabilities": psd_probabilities}
+        output_dict["psd_logits"] = psd_logits
+        output_dict["psd_probabilities"] = psd_probabilities
+        output_dict["psd_scatter_inds"] = scatter_inds
         
-        if pred_sense is not None: #i.e. we have a gold answer and can backprop the loss from our predictions
+        if pred_sense is not None and calculate_loss: #i.e. we have a gold answer and can backprop the loss from our predictions
             _, targets = torch.eq(scatter_inds,pred_sense).max(1)
             try:
                 psd_loss = F.cross_entropy(psd_logits.view(batch_size, compact_size), targets, size_average=True)
@@ -219,12 +220,11 @@ class SemanticRoleLabeler(Model):
                 print(e)
                 ipy.embed()
             output_dict["psd_loss"] = psd_loss
-
-        # combine loss, for backprop interface
-        loss = arg_loss + psd_loss
-        #ipy.embed()
-        output_dict["loss"] = loss
-        #output_dict["loss"] = arg_loss
+            # combine loss, for backprop interface
+            loss = arg_loss + psd_loss
+            #ipy.embed()
+            output_dict["loss"] = loss
+            #output_dict["loss"] = arg_loss
 
         # We need to retain the mask in the output dictionary
         # so that we can crop the sequences to remove padding
@@ -233,6 +233,7 @@ class SemanticRoleLabeler(Model):
         # we'll get to that later.
         output_dict["mask"] = mask
         #output_dict["psd_mask"] = psd_mask
+
         return output_dict
 
     @overrides
@@ -257,6 +258,16 @@ class SemanticRoleLabeler(Model):
                     for x in max_likelihood_sequence]
             all_tags.append(tags)
         output_dict['tags'] = all_tags
+
+        sense_probabilities = output_dict['psd_probabilities']
+        max_prob, indices = torch.max(sense_probabilities,1)
+        all_senses = []
+        for row, index in enumerate(indices.data):
+            prediction_index = output_dict['psd_scatter_inds'][row,index].data[0]
+            predicted_sense = self.vocab.get_token_from_index(prediction_index, namespace="senses")
+            all_senses.append(predicted_sense)
+        output_dict['sense'] = all_senses
+
         return output_dict
 
     def get_metrics(self, reset: bool = False):
@@ -425,9 +436,10 @@ def write_to_conll_2009_eval_file(prediction_file: TextIO,
                                   gold_file: TextIO,
                                   pred_indices: List[List[int]],
                                   gold_senses: List[List[str]],
+                                  predicted_senses: List[List[str]],
                                   sentence: List[str],
-                                  predicted_tags: List[List[str]],
-                                  gold_tags: List[List[str]]):
+                                  gold_tags: List[List[str]],
+                                  predicted_tags: List[List[str]]):
     """
     Prints predicate argument predictions and optionally gold labels for a single 
     predicate in a sentence to two provided file references.
@@ -452,11 +464,16 @@ def write_to_conll_2009_eval_file(prediction_file: TextIO,
         The gold BIO labels.
     """
     pred_only_sentence = ["_"] * len(sentence)
+    gold_only_sentence = ["_"] * len(sentence)
+    pred_indicators = ["_"] * len(sentence)
 
-    for pred_index_set in pred_indices:
+    for i, pred_index_set in enumerate(pred_indices):
         for pidx, val in enumerate(pred_index_set):
             if val:
-                pred_only_sentence[pidx] = 'Y'
+                pred_only_sentence[pidx] = predicted_senses[i]
+                if len(gold_senses) > 0:
+                    gold_only_sentence[pidx] = gold_senses[i]
+                pred_indicators[pidx] = 'Y'
 
     lines = []
     for idx in range(len(sentence)):
@@ -464,10 +481,10 @@ def write_to_conll_2009_eval_file(prediction_file: TextIO,
         line = ["_"] * (14 + len(pred_indices))
         line[0] = str(idx+1)
         line[1] = word
-        if pred_only_sentence[idx] == 'Y':
-            line[12] = pred_only_sentence[idx]
-            #line[13] = word.split(':')[-1] + '.01' # very poor heuristic for predicate sense disambiguation
 
+        if pred_indicators[idx] == 'Y':
+            line[12] = pred_indicators[idx]
+            line[13] = pred_only_sentence[idx]
         for i, predicate_tags in enumerate(predicted_tags):
             if predicate_tags[idx] != 'O':
                 tag = predicate_tags[idx]
@@ -475,11 +492,16 @@ def write_to_conll_2009_eval_file(prediction_file: TextIO,
         prediction_file.write('\t'.join(line)+'\n')
         prediction_file.flush()
         lines.append(line)
+
+        if pred_indicators[idx] == 'Y':
+            line[13] = gold_only_sentence[idx]
         for i, predicate_tags in enumerate(gold_tags):
             if predicate_tags[idx] != 'O':
                 tag = predicate_tags[idx]
                 line[14+i] = '-'.join(tag.split('-')[1:]) # remove the B- from the beginning of the tag
         gold_file.write('\t'.join(line)+'\n')
+        gold_file.flush()
+
     prediction_file.write("\n")
     gold_file.write("\n")
 

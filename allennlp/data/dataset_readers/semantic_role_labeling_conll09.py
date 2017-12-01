@@ -119,8 +119,9 @@ class SrlReader(DatasetReader):
     A ``Dataset`` of ``Instances`` for Semantic Role Labelling.
 
     """
-    def __init__(self, token_indexers: Dict[str, TokenIndexer] = None) -> None:
+    def __init__(self, token_indexers: Dict[str, TokenIndexer] = None, for_training: bool=True) -> None:
         self._token_indexers = token_indexers or {"tokens": SingleIdTokenIndexer()}
+        self.for_training = for_training
 
     def _process_sentence(self,
                           sentence_tokens: List[str],
@@ -300,7 +301,7 @@ class SrlReader(DatasetReader):
         seen /in the test set/!
         need to connect this step to Vocabulary somehow....
         """
-
+        #instances = instances[:15000]
         if not instances:
             raise ConfigurationError("No instances were read from the given filepath {}. "
                                      "Is the path correct?".format(file_path))
@@ -323,21 +324,20 @@ class SrlReader(DatasetReader):
         text_field = TextField(tokens, token_indexers=self._token_indexers)
         fields['tokens'] = text_field
         fields['pred_indicator'] = SequenceLabelField(pred_label, text_field)
-        if tags:
+        if tags and self.for_training:
             fields['tags'] = SequenceLabelField(tags, text_field)
 
         # for predicate sense disambiguation
         # use name *_labels because we don't want an UNK or padding
-        fields['pred_sense'] = LabelField(pred_sense, label_namespace='sense_labels')
         predicate = pred_sense.split('.')[0]
-        token = '_'
-        if 1 in pred_label:
-            token = tokens[pred_label.index(1)].text
         fields['pred_sense_set'] = MapLabelField(tok_lemma, predicate, pred_sense, 
                                                  index_label_namespace='lemmas',
-                                                 set_label_namespace='sense_set_labels', 
-                                                 target_label_namespace='sense_labels')
-        #"""
+                                                 set_label_namespace='sense_sets', 
+                                                 target_label_namespace='senses')
+
+        if self.for_training:
+            fields['pred_sense'] = LabelField(pred_sense, label_namespace='senses', use_unk=True)
+
         inst = Instance(fields)
         if sentence_id is not None:
             inst.sentence_id = sentence_id

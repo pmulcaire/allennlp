@@ -108,32 +108,48 @@ def evaluate_predict(model: Model,
     all_words = {}
     all_predicate_inds = defaultdict(list)
     all_gold_senses = defaultdict(list)
+    all_predicted_senses = defaultdict(list)
     all_gold_tags = defaultdict(list)
     all_predicted_tags = defaultdict(list)
-    for instance in generator_tqdm:
-        output = model.forward_on_instance(instance, cuda_device)
+
+    print("setting up conll output")
+
+    for idx, instance in enumerate(generator_tqdm):
+        output = model.forward_on_instance(instance, cuda_device, calculate_loss=False)
         predicted_tags = output['tags']
-        gold_senses = instance.fields['pred_sense'].label
-        gold_tags = instance.fields['tags'].labels
+        #gold_senses = instance.fields['pred_sense'].label
+        #gold_tags = instance.fields['tags'].labels
         words = instance.fields['tokens'].tokens
         pred_indices = instance.fields['pred_indicator'].labels
+        
+        sense_probabilities = output['psd_probabilities']
+        
+        predicted_sense = output['sense']
+        if predicted_sense == model.vocab._oov_token:
+            # not a real predicate sense, because we didn't recognize the predicate
+            # guess it with a heuristic
+            tok_lemma = instance.fields['pred_sense_set'].index_label
+            predicted_sense = tok_lemma.split(':')[-1] + '.01'
         sid = instance.sentence_id
         if sid in all_words:
             assert all_words[sid] == words
         else:
             all_words[sid] = words
         all_predicate_inds[sid].append(pred_indices)
-        all_gold_senses[sid].append(gold_senses)
-        all_gold_tags[sid].append(gold_tags)
+        #all_gold_senses[sid].append(gold_senses)
+        all_predicted_senses[sid].append(predicted_sense)
+        #all_gold_tags[sid].append(gold_tags)
         all_predicted_tags[sid].append(predicted_tags)
 
     for sid in all_words:
         write_to_conll_2009_eval_file(predict_file, gold_file,
                                       all_predicate_inds[sid],
                                       all_gold_senses[sid],
+                                      all_predicted_senses[sid],
                                       all_words[sid],
-                                      all_predicted_tags[sid],
-                                      all_gold_tags[sid])
+                                      all_gold_tags[sid],
+                                      all_predicted_tags[sid])
+    print("printed conll output")
 
     return True
 
@@ -153,6 +169,7 @@ def evaluate_from_args(args: argparse.Namespace) -> Dict[str, Any]:
 
     # Load the evaluation data
     dataset_reader = DatasetReader.from_params(config.pop('dataset_reader'))
+    #dataset_reader.for_training = False
     evaluation_data_path = args.evaluation_data_file
     logger.info("Reading evaluation data from %s", evaluation_data_path)
     dataset = dataset_reader.read(evaluation_data_path)

@@ -38,11 +38,12 @@ class LabelField(Field[numpy.ndarray]):
     def __init__(self,
                  label: Union[str, int],
                  label_namespace: str = 'labels',
-                 skip_indexing: bool = False) -> None:
+                 skip_indexing: bool = False,
+                 use_unk: bool = False) -> None:
         self.label = label
         self._label_namespace = label_namespace
         self._label_id = None
-        if not (self._label_namespace.endswith("labels") or self._label_namespace.endswith("tags")):
+        if not use_unk and not (self._label_namespace.endswith("labels") or self._label_namespace.endswith("tags")):
             logger.warning("Your label namespace was '%s'. We recommend you use a namespace "
                            "ending with 'labels' or 'tags', so we don't add UNK and PAD tokens by "
                            "default to your vocabulary.  See documentation for "

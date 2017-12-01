@@ -9,7 +9,7 @@ import logging
 
 from allennlp.common.params import Params
 from allennlp.common.registrable import Registrable
-from allennlp.data import Instance, Vocabulary
+from allennlp.data import Instance, Vocabulary, MapVocabulary
 from allennlp.nn.util import arrays_to_variables, device_mapping
 from allennlp.nn.regularizers import RegularizerApplicator
 
@@ -102,7 +102,7 @@ class Model(torch.nn.Module, Registrable):
         """
         raise NotImplementedError
 
-    def forward_on_instance(self, instance: Instance, cuda_device: int) -> Dict[str, numpy.ndarray]:
+    def forward_on_instance(self, instance: Instance, cuda_device: int, calculate_loss: bool=True) -> Dict[str, numpy.ndarray]:
         """
         Takes an :class:`~allennlp.data.instance.Instance`, which typically has raw text in it,
         converts that text into arrays using this model's :class:`Vocabulary`, passes those arrays
@@ -115,7 +115,7 @@ class Model(torch.nn.Module, Registrable):
                                           add_batch_dimension=True,
                                           cuda_device=cuda_device,
                                           for_training=False)
-        forward_tensors = self.forward(**model_input)
+        forward_tensors = self.forward(**model_input, calculate_loss=calculate_loss)
         outputs = self.decode(forward_tensors)
 
         for name, output in list(outputs.items()):
@@ -202,7 +202,7 @@ class Model(torch.nn.Module, Registrable):
 
         # Load vocabulary from file
         vocab_dir = os.path.join(serialization_dir, 'vocabulary')
-        vocab = Vocabulary.from_files(vocab_dir)
+        vocab = MapVocabulary.from_files(vocab_dir)
 
         model_params = config.get('model')
 

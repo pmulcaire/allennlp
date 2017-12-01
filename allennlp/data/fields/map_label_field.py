@@ -90,12 +90,15 @@ class MapLabelField(ListField):
         if not (self._target_label_namespace.endswith("labels") or self._target_label_namespace.endswith("tags")):
             namespace_err = 'secondary'
             namespace = self._target_label_namespace
+
+        """
         if namespace_err is not None:
             logger.warning("Your {} label namespace was '{}'. ".format(namespace_err, namespace) +
                            "We recommend you use a namespace ending with 'labels' or 'tags', " +
                            "so we don't add UNK and PAD tokens by default to your vocabulary.  " +
                            "See documentation for `non_padded_namespaces` parameter in Vocabulary.",
                            self._set_label_namespace)
+        """
 
         if skip_indexing:
             if not isinstance(index_label, int) and isinstance(target_label, int):

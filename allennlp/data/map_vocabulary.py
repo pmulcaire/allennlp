@@ -9,6 +9,8 @@ import codecs
 import logging
 import os
 
+from overrides import overrides
+
 import tqdm
 
 import IPython as ipy
@@ -162,15 +164,9 @@ class MapVocabulary(Vocabulary):
                     token_counts.sort(key=lambda x: len(x[1]), reverse=True)
                     if max_vocab:
                         token_counts = token_counts[:max_vocab]
-                    
-                    #print("adding token to namespace with list of indices; namespace should be a map-related one")
-                    #ipy.embed()
-
                     for token, indices in token_counts:
-                        try:
-                            self.add_token_to_map(token, indices, namespace)
-                        except:
-                            ipy.embed()
+                        self.add_token_to_map(token, indices, namespace)
+                    self.add_token_to_map(DEFAULT_OOV_TOKEN, [DEFAULT_OOV_TOKEN], namespace)
                 else:
                     token_counts.sort(key=lambda x: x[1], reverse=True)
                     if max_vocab:
@@ -439,4 +435,11 @@ class MapVocabulary(Vocabulary):
             return indices
         else:
             return self._token_to_index[namespace][token]
+
+    @overrides
+    def get_token_from_index(self, index: int, namespace: str = 'tokens') -> str:
+        if index in self._index_to_token[namespace]:
+            return self._index_to_token[namespace][index]
+        elif self._oov_token in self._index_to_token[namespace]:
+            return self._index_to_token[namespace][self._oov_token]
 
