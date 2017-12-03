@@ -236,7 +236,7 @@ class SrlReader(DatasetReader):
                         conll_components = line.split()
                         word = conll_components[1] # 1 for surface form, 3 for predicted lemma
                         lemma = conll_components[2]
-                        if not (len(word) > 3 and word[:3] == lang and word[3] == ':'):
+                        if not (len(word) > 3 and word[3] == ':'):
                             word = lang + ':' + word
                             lemma = lang + ':' + lemma
                         sentence.append(word)
@@ -284,24 +284,6 @@ class SrlReader(DatasetReader):
                             senses.append(conll_components[13])
                             token_to_senses[word].add(conll_components[13])
 
-        """
-        for instance in instances:
-            senses = []
-            if 1 in instance.fields['pred_indicator'].labels:
-                pred_ind = instance.fields['pred_indicator'].labels.index(1)
-                pred_token = instance.fields['tokens'].tokens[pred_ind]
-                for pred_sense in token_to_senses[pred_token.text]:
-                    senses.append(LabelField(pred_sense, label_namespace='sense_labels'))
-            else:
-                senses.append(LabelField('_', label_namespace='sense_labels')) #hopefully never relevant
-            instance.fields['pred_sense_set'] = ListField(senses)
-        """
-        """
-        TODO TK: this doesn't work at test time, since the pred_sense_sets will only be drawn from what's 
-        seen /in the test set/!
-        need to connect this step to Vocabulary somehow....
-        """
-        #instances = instances[:15000]
         if not instances:
             raise ConfigurationError("No instances were read from the given filepath {}. "
                                      "Is the path correct?".format(file_path))
