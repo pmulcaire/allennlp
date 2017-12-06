@@ -64,8 +64,8 @@ class MapLabelField(ListField):
                  set_index_map: str = None,
                  set_target_map: str = None,
                  skip_indexing: bool = False) -> None:
-        self.index_label = index_label # predicate token
-        self.set_label = set_label # predicate lemma
+        self.index_label = index_label # predicate token lemma
+        self.set_label = set_label # predicate ID
         self.target_label = target_label # predicate sense
 
         self.target_label_set = set()
