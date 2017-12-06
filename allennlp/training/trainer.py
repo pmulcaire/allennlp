@@ -406,7 +406,7 @@ class Trainer:
                 estimated_time_remaining = training_elapsed_time * \
                     ((self._num_epochs - epoch_counter) / float(epoch - epoch_counter + 1) - 1)
                 formatted_sofar = time.strftime("%H:%M:%S", time.gmtime(training_elapsed_time))
-                logger.info("Training time elapsed: " + formatted_time)
+                logger.info("Training time elapsed: " + formatted_sofar)
                 formatted_time = time.strftime("%H:%M:%S", time.gmtime(estimated_time_remaining))
                 logger.info("Estimated training time remaining: " + formatted_time)
 

@@ -296,7 +296,6 @@ class SrlReader(DatasetReader):
                             token_to_senses[word].add(conll_components[13])
             lang_instances[lang] = instances
 
-        ipy.embed()
         instances = self.balance_by_instances(lang_instances)
 
         if not instances:
