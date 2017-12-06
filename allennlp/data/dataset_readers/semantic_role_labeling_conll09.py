@@ -129,9 +129,10 @@ class SrlReader(DatasetReader):
 
     def _process_sentence(self,
                           sentence_tokens: List[str],
-                          sentence_lemmas: List[str],
                           sentence_pos: List[str],
+                          langid: str,
                           predicate_indices: List[int],
+                          predicate_lemmas: List[str],
                           predicate_senses: List[int],
                           predicate_argument_labels: List[List[str]],
                           sentence_id: int) -> List[Instance]:
@@ -161,17 +162,17 @@ class SrlReader(DatasetReader):
             pred_label = [0 for _ in sentence_tokens]
             pred_sense = "_"
             tok_lemma = "_"
-            instances = [self.text_to_instance(tokens, tok_lemma, pos_tags, pred_label, pred_sense, tags, sentence_id)]
+            instances = [self.text_to_instance(tokens, pos_tags, langid, pred_label, tok_lemma, pred_sense, tags, sentence_id)]
         else:
             instances = []
             for pred_index, tok_lemma, pred_sense, annotation in zip(predicate_indices,
-                                                          sentence_lemmas,
+                                                          predicate_lemmas,
                                                           predicate_senses,
                                                           predicate_argument_labels):
                 tags = annotation
                 pred_label = [0 for _ in sentence_tokens]
                 pred_label[pred_index] = 1
-                instance = self.text_to_instance(tokens, tok_lemma, pos_tags, pred_label, pred_sense, tags, sentence_id)
+                instance = self.text_to_instance(tokens, pos_tags, langid, pred_label, tok_lemma, pred_sense, tags, sentence_id)
                 instances.append(instance)
         instance_count = len(instances)
         for instance in instances:
@@ -229,9 +230,10 @@ class SrlReader(DatasetReader):
                             if not sentence:
                                 continue
                             cur_instances = self._process_sentence(sentence,
-                                                                   lemmas,
                                                                    pos_tags,
+                                                                   lang,
                                                                    predicates,
+                                                                   lemmas,
                                                                    senses,
                                                                    predicate_argument_labels,
                                                                    sentence_count)
@@ -340,9 +342,10 @@ class SrlReader(DatasetReader):
 
     def text_to_instance(self,  # type: ignore
                          tokens: List[Token],
-                         tok_lemma: str,
                          pos_tags: List[str],
+                         langid: str,
                          pred_label: List[int],
+                         tok_lemma: str,
                          pred_sense: str,
                          tags: List[str] = None,
                          sentence_id=None) -> Instance:
@@ -355,6 +358,7 @@ class SrlReader(DatasetReader):
         fields: Dict[str, Field] = {}
         text_field = TextField(tokens, token_indexers=self._token_indexers)
         fields['tokens'] = text_field
+        fields['langid'] = LabelField(langid, label_namespace="language_labels")
         fields['pred_indicator'] = SequenceLabelField(pred_label, text_field)
         if tags and self.for_training:
             fields['tags'] = SequenceLabelField(tags, text_field)
@@ -384,7 +388,6 @@ class SrlReader(DatasetReader):
     @classmethod
     def from_params(cls, params: Params) -> 'SrlReader':
         token_indexers = TokenIndexer.dict_from_params(params.pop('token_indexers', {}))
-        lps = params.pop("languages")
-        languages = list(lps.values())
+        languages = list(params.pop("languages").values())
         params.assert_empty(cls.__name__)
         return SrlReader(token_indexers=token_indexers, languages=languages)

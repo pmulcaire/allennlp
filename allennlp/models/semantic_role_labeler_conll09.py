@@ -55,6 +55,8 @@ class SemanticRoleLabeler(Model):
                  text_field_embedder: TextFieldEmbedder,
                  stacked_encoder: Seq2SeqEncoder,
                  binary_feature_dim: int,
+                 languages: List[str],
+                 langid_dim: int,
                  embedding_dropout: float = 0.0,
                  initializer: InitializerApplicator = InitializerApplicator(),
                  regularizer: Optional[RegularizerApplicator] = None) -> None:
@@ -69,6 +71,10 @@ class SemanticRoleLabeler(Model):
         self.span_metric = SpanBasedF1Measure(vocab, tag_namespace="labels", ignore_classes=["V"])
 
         self.stacked_encoder = stacked_encoder
+        
+        self.languages = languages
+        self.langid_embedding = Embedding(len(self.languages), langid_dim)
+
         # There are exactly 2 binary features for the predicate embedding.
         self.binary_feature_embedding = Embedding(2, binary_feature_dim)
         self.tag_projection_layer = TimeDistributed(Linear(self.stacked_encoder.get_output_dim(),
@@ -82,7 +88,7 @@ class SemanticRoleLabeler(Model):
 
         self.embedding_dropout = Dropout(p=embedding_dropout)
 
-        if text_field_embedder.get_output_dim() + binary_feature_dim != stacked_encoder.get_input_dim():
+        if text_field_embedder.get_output_dim() + binary_feature_dim + langid_dim != stacked_encoder.get_input_dim():
             raise ConfigurationError("The SRL Model uses a binary predicate indicator feature, meaning "
                                      "the input dimension of the stacked_encoder must be equal to "
                                      "the output dimension of the text_field_embedder + 1.")
@@ -91,6 +97,7 @@ class SemanticRoleLabeler(Model):
 
     def forward(self,  # type: ignore
                 tokens: Dict[str, torch.LongTensor],
+                langid: torch.LongTensor, #1x1, just an int?
                 pred_indicator: torch.LongTensor,
                 pred_sense_set: torch.LongTensor,
                 pred_sense: torch.LongTensor = None,
@@ -134,21 +141,32 @@ class SemanticRoleLabeler(Model):
             A scalar loss to be optimised.
 
         """
-        embedded_text_input = self.embedding_dropout(self.text_field_embedder(tokens)) # (batch_size, sequence_length, embedding_size)
         mask = get_text_field_mask(tokens) # (batch_size, sequence_length)
-        embedded_pred_indicator = self.binary_feature_embedding(pred_indicator.long()) # (batch_size, sequence_length, embedding_size)
+        embedded_text_input = self.embedding_dropout(self.text_field_embedder(tokens)) 
+        batch_size, sequence_length, embedding_size = embedded_text_input.size()
+        # (batch_size, sequence_length, embedding_size)
+        embedded_pred_indicator = self.binary_feature_embedding(pred_indicator.long()) 
+        # (batch_size, sequence_length, binary_feature_dim)
+        embedded_langid = self.langid_embedding(langid.long())
+        # (batch_size, 1, binary_feature_dim)
+        embedded_langids = self.langid_embedding(langid.long()).repeat(1,sequence_length,1)
+
+        #ipy.embed()
+
         # Concatenate the predicate feature onto the embedded text. This now
         # has shape (batch_size, sequence_length, embedding_dim + binary_feature_dim).
-        embedded_text_with_pred_indicator = torch.cat([embedded_text_input, embedded_pred_indicator], -1)
-        batch_size, sequence_length, embedding_dim_with_binary_feature = embedded_text_with_pred_indicator.size()
+        embedded_text_with_pred_and_langid = torch.cat([embedded_text_input, 
+                                                        embedded_pred_indicator, 
+                                                        embedded_langids], -1)
+        final_embedding_dim = embedded_text_with_pred_and_langid.size(2)
 
-        if self.stacked_encoder.get_input_dim() != embedding_dim_with_binary_feature:
+        if self.stacked_encoder.get_input_dim() != final_embedding_dim:
             raise ConfigurationError("The SRL model uses an indicator feature, which makes "
                                      "the embedding dimension one larger than the value "
                                      "specified. Therefore, the 'input_dim' of the stacked_encoder "
                                      "must be equal to total_embedding_dim + 1.")
 
-        encoded_text = self.stacked_encoder(embedded_text_with_pred_indicator, mask)
+        encoded_text = self.stacked_encoder(embedded_text_with_pred_and_langid, mask)
 
         logits = self.tag_projection_layer(encoded_text)
         reshaped_log_probs = logits.view(-1, self.num_classes)
@@ -321,6 +339,9 @@ class SemanticRoleLabeler(Model):
         stacked_encoder = Seq2SeqEncoder.from_params(params.pop("stacked_encoder"))
         binary_feature_dim = params.pop("binary_feature_dim")
 
+        languages = list(params.pop("languages").values())
+        langid_dim = params.pop("langid_dim")
+
         init_params = params.pop('initializer', None)
         reg_params = params.pop('regularizer', None)
         initializer = (InitializerApplicator.from_params(init_params)
@@ -332,6 +353,8 @@ class SemanticRoleLabeler(Model):
                    text_field_embedder=text_field_embedder,
                    stacked_encoder=stacked_encoder,
                    binary_feature_dim=binary_feature_dim,
+                   languages=languages,
+                   langid_dim=langid_dim,
                    initializer=initializer,
                    regularizer=regularizer)
 

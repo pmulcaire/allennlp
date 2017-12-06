@@ -206,7 +206,7 @@ class Trainer:
         self._model.train()
 
         # Get tqdm for the training batches
-        train_generator = self._iterator(self._train_dataset, num_epochs=1)
+        train_generator = self._iterator(self._train_dataset, num_epochs=1, shuffle=True)
         num_training_batches = self._iterator.get_num_batches(self._train_dataset)
         train_generator_tqdm = tqdm.tqdm(train_generator,
                                          disable=self._no_tqdm,
