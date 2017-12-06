@@ -447,6 +447,8 @@ class Trainer:
                 logger.info("Best validation performance so far. "
                             "Copying weights to '%s/best.th'.", self._serialization_dir)
                 shutil.copyfile(model_path, os.path.join(self._serialization_dir, "best.th"))
+                with open(os.path.join(self._serialization_dir, "best_so_far.txt"), 'a') as f:
+                    f.write("{}\n".format(epoch))
 
     def _restore_checkpoint(self) -> Tuple[int, List[float]]:
         """

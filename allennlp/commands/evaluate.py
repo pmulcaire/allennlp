@@ -109,6 +109,7 @@ def evaluate_predict(model: Model,
     all_predicate_inds = defaultdict(list)
     all_gold_senses = defaultdict(list)
     all_predicted_senses = defaultdict(list)
+    all_pos_tags = defaultdict(list)
     all_gold_tags = defaultdict(list)
     all_predicted_tags = defaultdict(list)
 
@@ -117,6 +118,7 @@ def evaluate_predict(model: Model,
     for idx, instance in enumerate(generator_tqdm):
         output = model.forward_on_instance(instance, cuda_device, calculate_loss=False)
         predicted_tags = output['tags']
+        pos_tags = instance.pos_tags
         #gold_senses = instance.fields['pred_sense'].label
         #gold_tags = instance.fields['tags'].labels
         words = instance.fields['tokens'].tokens
@@ -138,6 +140,7 @@ def evaluate_predict(model: Model,
         all_predicate_inds[sid].append(pred_indices)
         #all_gold_senses[sid].append(gold_senses)
         all_predicted_senses[sid].append(predicted_sense)
+        all_pos_tags[sid] = pos_tags
         #all_gold_tags[sid].append(gold_tags)
         all_predicted_tags[sid].append(predicted_tags)
 
@@ -148,7 +151,8 @@ def evaluate_predict(model: Model,
                                       all_predicted_senses[sid],
                                       all_words[sid],
                                       all_gold_tags[sid],
-                                      all_predicted_tags[sid])
+                                      all_predicted_tags[sid],
+                                      all_pos_tags[sid])
     print("printed conll output")
 
     return True

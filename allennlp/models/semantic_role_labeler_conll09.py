@@ -439,7 +439,8 @@ def write_to_conll_2009_eval_file(prediction_file: TextIO,
                                   predicted_senses: List[List[str]],
                                   sentence: List[str],
                                   gold_tags: List[List[str]],
-                                  predicted_tags: List[List[str]]):
+                                  predicted_tags: List[List[str]],
+                                  pos_tags: Optional[List[str]] = None):
     """
     Prints predicate argument predictions and optionally gold labels for a single 
     predicate in a sentence to two provided file references.
@@ -481,6 +482,10 @@ def write_to_conll_2009_eval_file(prediction_file: TextIO,
         line = ["_"] * (14 + len(pred_indices))
         line[0] = str(idx+1)
         line[1] = word
+
+        if pos_tags is not None:
+            line[4] = pos_tags[idx]
+            line[5] = pos_tags[idx]
 
         if pred_indicators[idx] == 'Y':
             line[12] = pred_indicators[idx]

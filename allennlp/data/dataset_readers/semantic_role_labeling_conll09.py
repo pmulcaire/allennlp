@@ -12,7 +12,7 @@ from allennlp.common.checks import ConfigurationError
 from allennlp.common.file_utils import cached_path
 from allennlp.data.dataset import Dataset
 from allennlp.data.dataset_readers.dataset_reader import DatasetReader
-from allennlp.data.fields import Field, TextField, SequenceLabelField, LabelField, ListField, MapLabelField
+from allennlp.data.fields import Field, TextField, SequenceLabelField, LabelField, ListField, MapLabelField, MetadataField
 from allennlp.data.instance import Instance
 from allennlp.data.token_indexers import SingleIdTokenIndexer, TokenIndexer
 from allennlp.data.tokenizers import Token
@@ -120,12 +120,14 @@ class SrlReader(DatasetReader):
 
     """
     def __init__(self, token_indexers: Dict[str, TokenIndexer] = None, for_training: bool=True) -> None:
+        #self._token_indexers = token_indexers or {"tokens": SingleIdTokenIndexer(), "pos_tags": SingleIdTokenIndexer()}
         self._token_indexers = token_indexers or {"tokens": SingleIdTokenIndexer()}
         self.for_training = for_training
 
     def _process_sentence(self,
                           sentence_tokens: List[str],
                           sentence_lemmas: List[str],
+                          sentence_pos: List[str],
                           predicate_indices: List[int],
                           predicate_senses: List[int],
                           predicate_argument_labels: List[List[str]],
@@ -147,14 +149,16 @@ class SrlReader(DatasetReader):
         A list of Instances.
 
         """
-        tokens = [Token(t) for t in sentence_tokens]
+        #tokens = [Token(text=t, pos=p) for t,p in zip(sentence_tokens,sentence_pos)]
+        tokens = [Token(text=t) for t in sentence_tokens]
+        pos_tags = [tag for tag in sentence_pos]
         if not predicate_indices:
             # Sentence contains no predicates.
             tags = ["O" for _ in sentence_tokens]
             pred_label = [0 for _ in sentence_tokens]
             pred_sense = "_"
             tok_lemma = "_"
-            instances = [self.text_to_instance(tokens, tok_lemma, pred_label, pred_sense, tags, sentence_id)]
+            instances = [self.text_to_instance(tokens, tok_lemma, pos_tags, pred_label, pred_sense, tags, sentence_id)]
         else:
             instances = []
             for pred_index, tok_lemma, pred_sense, annotation in zip(predicate_indices,
@@ -164,7 +168,7 @@ class SrlReader(DatasetReader):
                 tags = annotation
                 pred_label = [0 for _ in sentence_tokens]
                 pred_label[pred_index] = 1
-                instance = self.text_to_instance(tokens, tok_lemma, pred_label, pred_sense, tags, sentence_id)
+                instance = self.text_to_instance(tokens, tok_lemma, pos_tags, pred_label, pred_sense, tags, sentence_id)
                 instances.append(instance)
         instance_count = len(instances)
         for instance in instances:
@@ -180,6 +184,7 @@ class SrlReader(DatasetReader):
 
         sentence: List[str] = []
         lemmas: List[str] = []
+        pos_tags: List[str] = []
         predicates: List[int] = []
         senses: List[str] = []
         predicate_argument_labels: List[List[str]] = []
@@ -213,6 +218,7 @@ class SrlReader(DatasetReader):
                                 continue
                             cur_instances = self._process_sentence(sentence,
                                                                    lemmas,
+                                                                   pos_tags,
                                                                    predicates,
                                                                    senses,
                                                                    predicate_argument_labels,
@@ -228,6 +234,7 @@ class SrlReader(DatasetReader):
                             # Reset everything for the next sentence.
                             sentence = []
                             lemmas = []
+                            pos_tags = []
                             predicates = []
                             senses = []
                             predicate_argument_labels = []
@@ -240,6 +247,7 @@ class SrlReader(DatasetReader):
                             word = lang + ':' + word
                             lemma = lang + ':' + lemma
                         sentence.append(word)
+                        pos_tags.append(conll_components[5]) # use predicted part of speech
                         word_index = len(sentence) - 1
                         if word_index == 0:
                             # We're starting a new sentence. Here we set up a list of lists
@@ -310,10 +318,12 @@ class SrlReader(DatasetReader):
 
     def text_to_instance(self,  # type: ignore
                          tokens: List[Token],
-                         tok_lemma: str, 
+                         tok_lemma: str,
+                         pos_tags: List[str],
                          pred_label: List[int],
                          pred_sense: str,
-                         tags: List[str] = None, sentence_id=None) -> Instance:
+                         tags: List[str] = None,
+                         sentence_id=None) -> Instance:
         """
         We take `pre-tokenized` input here, along with a predicate label.  The predicate label 
         should be a one-hot binary vector, the same length as the tokens, indicating the position
@@ -344,6 +354,9 @@ class SrlReader(DatasetReader):
         else:
             print("Problem with instance/sentence_id in allennlp/data/dataset_readers/semantic_role_labeling_conll09.py")
             ipy.embed()
+        if pos_tags:
+            # temp hack to ensure access during evaluate
+            inst.pos_tags = pos_tags
         return inst
 
     @classmethod
