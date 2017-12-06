@@ -119,8 +119,11 @@ class SrlReader(DatasetReader):
     A ``Dataset`` of ``Instances`` for Semantic Role Labelling.
 
     """
-    def __init__(self, token_indexers: Dict[str, TokenIndexer] = None, for_training: bool=True) -> None:
+    def __init__(self, token_indexers: Dict[str, TokenIndexer] = None, 
+                 languages: List[str] = None, 
+                 for_training: bool=True) -> None:
         self._token_indexers = token_indexers or {"tokens": SingleIdTokenIndexer()}
+        self.languages = languages
         self.for_training = for_training
 
     def _process_sentence(self,
@@ -176,7 +179,7 @@ class SrlReader(DatasetReader):
         # if `file_path` is a URL, redirect to the cache
         file_path = cached_path(file_path)
 
-        instances = []
+        lang_instances = {}
 
         sentence: List[str] = []
         lemmas: List[str] = []
@@ -187,20 +190,29 @@ class SrlReader(DatasetReader):
         token_to_senses = defaultdict(set)
 
         logger.info("Reading SRL instances from dataset file(s) at: %s", file_path)
+        if self.languages is not None:
+            logger.info("Languages: " + ", ".join(self.languages))
         if os.path.isfile(file_path):
             # mock os.walk return structure
             files = [(os.path.dirname(file_path), [], [file_path])]
         else:
             files = list(os.walk(file_path))
 
-        for root, _, data_files in tqdm.tqdm(files):
+        for root, _, data_files in files:
+            #ipy.embed()
+            lang = os.path.basename(root.strip('/')) #root.split('/')[-1]
+            if len(data_files) == 0:
+                continue
+            elif self.languages is not None and lang not in self.languages:
+                logger.info("skipping language {} which was not in config".format(lang))
+                continue
+            else:
+                logger.info("processing files for language {}".format(lang))
+            instances = []
             for data_file in data_files:
                 if not data_file.endswith("conll"):
+                    logger.info("skipping file {} which does not end in .conll".format(data_file))
                     continue
-                # TK TODO REMOVE - the language should be passed in configuration
-                lang = data_file.split('/')[-2]
-                logger.info("language {}".format(lang))
-
                 with codecs.open(os.path.join(root, data_file), 'r', encoding='utf8') as open_file:
                     for line in open_file:
                         line = line.strip()
@@ -221,7 +233,7 @@ class SrlReader(DatasetReader):
                             try:
                                 assert instances[-1].sentence_id == sentence_count or len(cur_instances) == 0
                             except:
-                                print("Problem with instance/sentence_id in allennlp/data/dataset_readers/semantic_role_labeling_conll09.py")
+                                print("Problem with instance/sentence_id in dataset_readers/semantic_role_labeling_conll09.py")
                                 ipy.embed()
                             sentence_count += 1
 
@@ -252,15 +264,6 @@ class SrlReader(DatasetReader):
                         for annotation_index in range(num_annotations):
                             annotation = conll_components[14 + annotation_index]
                             label = annotation.strip("()*")
-
-                            """
-                            TK TODO REMOVE
-                            This could be replaced by just one line:
-                            predicate_argument_labels[annotation_index].append(label)
-                            where '_' would be used as the "no annotation" symbol. But in
-                            case there is downstream code looking for B/I/O tags, use them
-                            for now.
-                            """
                             if "_" in annotation:
                                 # This word isn't an argument for this predicate.
                                 predicate_argument_labels[annotation_index].append("O")
@@ -283,12 +286,50 @@ class SrlReader(DatasetReader):
                             lemmas.append(lemma)
                             senses.append(conll_components[13])
                             token_to_senses[word].add(conll_components[13])
+            lang_instances[lang] = instances
+
+        ipy.embed()
+        instances = self.balance_by_instances(lang_instances)
 
         if not instances:
             raise ConfigurationError("No instances were read from the given filepath {}. "
                                      "Is the path correct?".format(file_path))
         logger.info("Read %d SRL instances from %d sentences in dataset file(s) at: %s", len(instances), sentence_count, file_path)
         return Dataset(instances)
+
+    def balance_by_instances(self,lang_instances):
+        instances = []
+        max_lang = max(lang_instances.keys(), key=lambda lang: len(lang_instances[lang]))
+        max_len = len(lang_instances[max_lang])
+        for lang in lang_instances:
+            if len(lang_instances[lang]) < max_len:
+                factor = int(max_len/len(lang_instances[lang]))
+                lang_instances[lang] = lang_instances[lang] * factor
+                diff = max_len - len(lang_instances[lang])
+                lang_instances[lang] += lang_instances[lang][:diff]
+            assert len(lang_instances[lang]) == max_len
+            instances += lang_instances[lang]
+        return instances
+
+    def balance_by_sentences(self,lang_instances):
+        instances = []
+        max_lang = max(lang_instances.keys(), key=lambda lang: len(set([sid for instance in lang_instances[lang]])))
+        max_len = len(lang_instances[max_lang])
+        for lang in lang_instances:
+            if len(lang_instances[lang]) < max_len:
+                factor = int(max_len/len(lang_instances[lang]))
+                lang_instances[lang] = lang_instances[lang] * factor
+                diff = max_len - len(lang_instances[lang])
+                lang_instances[lang] += lang_instances[lang][:diff]
+            assert len(lang_instances[lang]) == max_len
+            instances += lang_instances[lang]
+        return instances
+
+    def balance_by_sum(self,lang_instances):
+        instances = []
+        for lang in lang_instances:
+            instances += lang_instances[lang]
+        return instances
 
     def text_to_instance(self,  # type: ignore
                          tokens: List[Token],
@@ -331,5 +372,7 @@ class SrlReader(DatasetReader):
     @classmethod
     def from_params(cls, params: Params) -> 'SrlReader':
         token_indexers = TokenIndexer.dict_from_params(params.pop('token_indexers', {}))
+        lps = params.pop("languages")
+        languages = list(lps.values())
         params.assert_empty(cls.__name__)
-        return SrlReader(token_indexers=token_indexers)
+        return SrlReader(token_indexers=token_indexers, languages=languages)
