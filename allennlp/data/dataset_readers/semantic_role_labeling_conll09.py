@@ -296,7 +296,7 @@ class SrlReader(DatasetReader):
                             lemmas.append(lemma)
                             senses.append(conll_components[13])
                             token_to_senses[word].add(conll_components[13])
-            lang_instances[lang] = instances
+            lang_instances[lang] = instances[:500]
 
         instances = self.balance_by_instances(lang_instances)
 
