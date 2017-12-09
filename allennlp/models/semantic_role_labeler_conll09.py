@@ -78,6 +78,7 @@ class SemanticRoleLabeler(Model):
         self.langid_embedding = Embedding(len(self.languages), langid_dim)
         self.lang_encoders = language_encoders
         self.shared_encoder = shared_encoder
+        self.use_shared = False
 
         # There are exactly 2 binary features for the predicate embedding.
         self.binary_feature_embedding = Embedding(2, binary_feature_dim)
