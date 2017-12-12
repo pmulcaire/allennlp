@@ -361,7 +361,7 @@ class Vocabulary:
         else:
             if self._oov_token not in self._token_to_index[namespace]:
                 print("OOV token missing in allennlp/data/vocabulary.py")
-                ipy.embed()
+                raise IndexError
             return self._token_to_index[namespace][self._oov_token]
 
     def get_token_from_index(self, index: int, namespace: str = 'tokens') -> str:

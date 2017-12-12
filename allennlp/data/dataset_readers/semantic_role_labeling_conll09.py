@@ -361,7 +361,7 @@ class SrlReader(DatasetReader):
         fields['langid'] = LabelField(langid, label_namespace="language_labels")
         fields['pred_indicator'] = SequenceLabelField(pred_label, text_field)
         if tags and self.for_training:
-            fields['tags'] = SequenceLabelField(tags, text_field)
+            fields['tags'] = SequenceLabelField(tags, text_field, handle_unk=True)
 
         # for predicate sense disambiguation
         # use name *_labels because we don't want an UNK or padding
@@ -372,7 +372,7 @@ class SrlReader(DatasetReader):
                                                  target_label_namespace='senses')
 
         if self.for_training:
-            fields['pred_sense'] = LabelField(pred_sense, label_namespace='senses', use_unk=True)
+            fields['pred_sense'] = LabelField(pred_sense, label_namespace='senses', handle_unk=True)
 
         inst = Instance(fields)
         if sentence_id is not None:

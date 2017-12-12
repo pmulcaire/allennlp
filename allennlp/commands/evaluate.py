@@ -59,9 +59,8 @@ def add_subparser(parser: argparse._SubParsersAction) -> argparse.ArgumentParser
                            default=-1,
                            help='id of GPU to use (if any)')
     subparser.add_argument('--print_predictions',
-                           type=bool,
-                           default=False,
-                           help='whether to print CoNLL files containing the predicted and gold labelings')
+                           type=str,
+                           help='print CoNLL files containing the predicted and labelings to the given path')
     subparser.add_argument('-o', '--overrides',
                            type=str,
                            default="",
@@ -185,7 +184,8 @@ def evaluate_from_args(args: argparse.Namespace) -> Dict[str, Any]:
 
     if args.print_predictions:
         directory = os.path.dirname(args.archive_file)
-        predict_file = open(os.path.join(directory, 'predictions.conll'), 'w')
+        predict_filename = args.print_predictions
+        predict_file = open(predict_filename, 'w')
         gold_file = open(os.path.join(directory, 'gold.conll'), 'w')
         predictions = evaluate_predict(model, dataset, iterator, args.cuda_device, predict_file, gold_file)
 
