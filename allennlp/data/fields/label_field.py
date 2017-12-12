@@ -39,11 +39,11 @@ class LabelField(Field[numpy.ndarray]):
                  label: Union[str, int],
                  label_namespace: str = 'labels',
                  skip_indexing: bool = False,
-                 use_unk: bool = False) -> None:
+                 handle_unk: bool = False) -> None:
         self.label = label
         self._label_namespace = label_namespace
         self._label_id = None
-        if not use_unk and not (self._label_namespace.endswith("labels") or self._label_namespace.endswith("tags")):
+        if not handle_unk and not (self._label_namespace.endswith("labels") or self._label_namespace.endswith("tags")):
             logger.warning("Your label namespace was '%s'. We recommend you use a namespace "
                            "ending with 'labels' or 'tags', so we don't add UNK and PAD tokens by "
                            "default to your vocabulary.  See documentation for "
@@ -67,7 +67,13 @@ class LabelField(Field[numpy.ndarray]):
     @overrides
     def index(self, vocab: Vocabulary):
         if self._label_id is None:
-            self._label_id = vocab.get_token_index(self.label, self._label_namespace)  # type: ignore
+            try:
+                self._label_id = vocab.get_token_index(self.label, self._label_namespace)  # type: ignore
+            except IndexError as idxerr:
+                if self.handle_unk:
+                    self._label_id = 0
+                else:
+                    raise idxerr
 
     @overrides
     def get_padding_lengths(self) -> Dict[str, int]:  # pylint: disable=no-self-use

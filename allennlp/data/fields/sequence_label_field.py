@@ -40,11 +40,13 @@ class SequenceLabelField(Field[numpy.ndarray]):
     def __init__(self,
                  labels: Union[List[str], List[int]],
                  sequence_field: SequenceField,
-                 label_namespace: str = 'labels') -> None:
+                 label_namespace: str = 'labels'
+                 handle_unk=False) -> None:
         self.labels = labels
         self.sequence_field = sequence_field
         self._label_namespace = label_namespace
         self._indexed_labels = None
+        self.handle_unk = handle_unk
 
         if not (self._label_namespace.endswith("tags") or self._label_namespace.endswith("labels")):
             logger.warning("Your sequence label namespace was '%s'. We recommend you use a namespace "
@@ -73,8 +75,15 @@ class SequenceLabelField(Field[numpy.ndarray]):
     @overrides
     def index(self, vocab: Vocabulary):
         if self._indexed_labels is None:
-            self._indexed_labels = [vocab.get_token_index(label, self._label_namespace)  # type: ignore
-                                    for label in self.labels]
+            self._indexed_labels = []
+            for label in self.labels:
+                try:
+                    self._indexed_labels.append(vocab.get_token_index(label, self._label_namespace))  # type: ignore
+                except IndexError as idxerr:
+                    if self.handle_unk:
+                        self._indexed_labels.append(0)
+                    else:
+                        raise idxerr
 
     @overrides
     def get_padding_lengths(self) -> Dict[str, int]:
