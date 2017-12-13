@@ -40,7 +40,7 @@ class SequenceLabelField(Field[numpy.ndarray]):
     def __init__(self,
                  labels: Union[List[str], List[int]],
                  sequence_field: SequenceField,
-                 label_namespace: str = 'labels'
+                 label_namespace: str = 'labels',
                  handle_unk=False) -> None:
         self.labels = labels
         self.sequence_field = sequence_field
