@@ -2,3 +2,4 @@
 .cache/
 .coverage
 doc/_build/
+training_config/*
