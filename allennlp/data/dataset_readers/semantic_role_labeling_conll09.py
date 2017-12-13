@@ -122,8 +122,7 @@ class SrlReader(DatasetReader):
     def __init__(self, token_indexers: Dict[str, TokenIndexer] = None, 
                  languages: List[str] = None, 
                  for_training: bool=True) -> None:
-        #self._token_indexers = token_indexers or {"tokens": SingleIdTokenIndexer(), "pos_tags": SingleIdTokenIndexer()}
-        self._token_indexers = token_indexers or {"tokens": SingleIdTokenIndexer()}
+        self._token_indexers = token_indexers or {"tokens": SingleIdTokenIndexer(), "pos_tags": SingleIdTokenIndexer()}
         self.languages = languages
         self.for_training = for_training
 
@@ -152,8 +151,7 @@ class SrlReader(DatasetReader):
         A list of Instances.
 
         """
-        #tokens = [Token(text=t, pos=p) for t,p in zip(sentence_tokens,sentence_pos)]
-        tokens = [Token(text=t) for t in sentence_tokens]
+        tokens = [Token(text=t, pos=p) for t,p in zip(sentence_tokens,sentence_pos)]
         pos_tags = [tag for tag in sentence_pos]
         if not predicate_indices:
             # Sentence contains no predicates.
