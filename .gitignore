@@ -3,3 +3,6 @@
 .coverage
 doc/_build/
 training_config/*
+*.conll
+*.out
+*.err
