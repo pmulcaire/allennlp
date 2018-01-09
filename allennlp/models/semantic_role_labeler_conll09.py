@@ -41,11 +41,18 @@ class SemanticRoleLabeler(Model):
         A Vocabulary, required in order to compute sizes for input/output projections.
     text_field_embedder : ``TextFieldEmbedder``, required
         Used to embed the ``tokens`` ``TextField`` we get as input to the model.
-    stacked_encoder : ``Seq2SeqEncoder``
-        The encoder (with its own internal stacking) that we will use in between embedding tokens
-        and predicting output tags.
     binary_feature_dim : int, required.
         The dimensionality of the embedding of the binary predicate features.
+    languages : ``List[str]``, required
+        A list of language names.
+    langid_dim : float, required
+        The dimension of the language ID vector.
+    encoder : ``Dict[str, List[Seq2SeqEncoder]]``, required
+        A Dict of lists of Seq2SeqEncoders (each with its own internal stacking) that we 
+        will use in between embedding tokens and predicting output tags.
+    connections : ``Dict[List[str]]``, required
+        A Dict representing the combinations of encodings used to get final vectors for
+        prediction.
     initializer : ``InitializerApplicator``, optional (default=``InitializerApplicator()``)
         Used to initialize the model parameters.
     regularizer : ``RegularizerApplicator``, optional (default=``None``)
@@ -53,12 +60,11 @@ class SemanticRoleLabeler(Model):
     """
     def __init__(self, vocab: Vocabulary,
                  text_field_embedder: TextFieldEmbedder,
-                 stacked_encoder: Seq2SeqEncoder,
                  binary_feature_dim: int,
                  languages: List[str],
                  langid_dim: int,
-                 language_encoders: List[Seq2SeqEncoder],
-                 shared_encoder: Optional[Seq2SeqEncoder] = None,
+                 encoders: Dict[str,List[Seq2SeqEncoder]],
+                 connections: Dict[str,List[str]],
                  embedding_dropout: float = 0.0,
                  initializer: InitializerApplicator = InitializerApplicator(),
                  regularizer: Optional[RegularizerApplicator] = None) -> None:
@@ -72,20 +78,26 @@ class SemanticRoleLabeler(Model):
         # for the predicate, because the predicate index is provided to the model.
         self.span_metric = SpanBasedF1Measure(vocab, tag_namespace="labels", ignore_classes=["V"])
 
-        self.stacked_encoder = stacked_encoder
-        
         self.languages = languages
         self.langid_embedding = Embedding(len(self.languages), langid_dim)
-        self.lang_encoders = language_encoders
-        self.shared_encoder = shared_encoder
-        self.use_shared = False
+        self.encoders = encoders
+        self.connections = connections
+        if 'shared_encoder_a' in self.encoders or 'shared_encoder_b' in self.encoders:
+            self.use_shared = True
+        else:
+            self.use_shared = False
+
+        self.output_dim = 0
+        for encoder_type in ['shared_encoder_b', 'lang_encoder_b']:
+            if encoder_type in self.encoders:
+                self.output_dim += self.encoders[encoder_type][0].get_output_dim()
 
         # There are exactly 2 binary features for the predicate embedding.
         self.binary_feature_embedding = Embedding(2, binary_feature_dim)
-        self.tag_projection_layer = TimeDistributed(Linear(self.stacked_encoder.get_output_dim(),
+        self.tag_projection_layer = TimeDistributed(Linear(self.output_dim,
                                                            self.num_classes))
         self.sense_weights = Parameter(torch.Tensor(self.num_senses, 
-                                                    self.stacked_encoder.get_output_dim()))
+                                                    self.output_dim))
         self.sense_bias = self.bias = Parameter(torch.Tensor(self.num_senses))
         stdv = 1. / math.sqrt(self.sense_weights.size(1))
         self.sense_weights.data.uniform_(-stdv, stdv)
@@ -93,16 +105,12 @@ class SemanticRoleLabeler(Model):
 
         self.embedding_dropout = Dropout(p=embedding_dropout)
 
-        if text_field_embedder.get_output_dim() + binary_feature_dim + langid_dim != self.lang_encoders[0].get_input_dim():
-            raise ConfigurationError("The SRL Model uses a binary predicate indicator feature, meaning "
-                                     "the input dimension of the language-specific encoder must be equal to "
-                                     "the output dimension of the text_field_embedder + 1.")
-        if self.lang_encoders[0].get_output_dim() != self.stacked_encoder.get_input_dim():
-            if self.lang_encoders[0].get_output_dim() + self.shared_encoder.get_output_dim() != self.stacked_encoder.get_input_dim():
-                raise ConfigurationError("the input dimension of the stacked_encoder must be equal to "
-                                         "the output dimension of the language-specific encoder.")
-            else:
-                self.use_shared = True
+        for encoder_type in ['shared_encoder_a', 'lang_encoder_a']:
+            for encoder in encoders[encoder_type]:
+                if text_field_embedder.get_output_dim() + binary_feature_dim + langid_dim != encoder.get_input_dim():
+                    raise ConfigurationError("The SRL Model uses a binary predicate indicator feature, meaning "
+                                             "the input dimension of the language-specific encoder must be equal to "
+                                             "the output dimension of the text_field_embedder + 1.")
 
         initializer(self)
 
@@ -169,28 +177,63 @@ class SemanticRoleLabeler(Model):
                                                         embedded_langids], -1)
         full_embedding_dim = embedded_text_with_pred_and_langid.size(2)
         
+        """
+        ------------------------------------
+        Encode text with the biLSTM encoders
+        ------------------------------------
+        """
         if langid.data.max() != langid.data.min():
             print("Multiple languages in batch?")
             ipy.embed()
         langid_val = langid.data.max()
-        lang_encoder = self.lang_encoders[langid_val]
-        if lang_encoder.get_input_dim() != full_embedding_dim:
-            print("Checking encoder dimensions in forward()")
+
+        repr_list_a = []
+        if "lang_encoder_a" in self.encoders:
+            lang_encoder = self.encoders["lang_encoder_a"][langid_val]
+            lang_repr = lang_encoder(embedded_text_with_pred_and_langid, mask)
+            repr_list_a.append(lang_repr)
+        if "shared_encoder_a" in self.encoders:
+            shared_encoder = self.encoders["shared_encoder_a"][0]
+            shared_repr = shared_encoder(embedded_text_with_pred_and_langid, mask)
+            repr_list_a.append(shared_repr)
+        intermediate_repr = torch.cat(repr_list_a,-1)
+
+        repr_list_b = []
+        if "lang_encoder_b" in self.encoders:
+            lang_encoder = self.encoders["lang_encoder_b"][langid_val]
+            if ("lang_encoder_a" in self.connections["lang_encoder_b"]) and \
+               ("shared_encoder_a" in self.connections["lang_encoder_b"]):
+                lang_repr_b = lang_encoder(intermediate_repr, mask)
+            elif ("lang_encoder_a" in self.connections["lang_encoder_b"]):
+                lang_repr_b = lang_encoder(lang_repr, mask)
+            elif ("shared_encoder_a" in self.connections["lang_encoder_b"]):
+                lang_repr_b = lang_encoder(shared_repr, mask)
+            else: # no preceding encoders, so take original embeddings as inputs
+                lang_repr_b = lang_encoder(embedded_text_with_pred_and_langid, mask)
+            repr_list_b.append(lang_repr_b)
+        if "shared_encoder_b" in self.encoders:
+            shared_encoder = self.encoders["shared_encoder_b"][0]
+            if ("lang_encoder_a" in self.connections["shared_encoder_b"]) and \
+               ("shared_encoder_a" in self.connections["shared_encoder_b"]):
+                shared_repr_b = shared_encoder(intermediate_repr, mask)
+            elif ("lang_encoder_a" in self.connections["shared_encoder_b"]):
+                shared_repr_b = shared_encoder(lang_repr, mask)
+            elif ("shared_encoder_a" in self.connections["shared_encoder_b"]):
+                shared_repr_b = shared_encoder(shared_repr, mask)
+            else: # no preceding encoders, so take original embeddings as inputs
+                shared_repr_b = shared_encoder(embedded_text_with_pred_and_langid, mask)
+            repr_list_b.append(shared_repr_b)
+        encoded_text = torch.cat(repr_list_b,-1)
+
+        """
+        -------------------------
+        Get arg label predictions
+        -------------------------
+        """
+        try:
+            logits = self.tag_projection_layer(encoded_text)
+        except:
             ipy.embed()
-            raise ConfigurationError("The 'input_dim' of each lang_encoder must be equal " + \
-                                     "to the full_embedding_dim: " + \
-                                     "expected {}, got {}.".format(full_embedding_dim, lang_encoder.get_input_dim()))
-
-
-        lang_repr = lang_encoder(embedded_text_with_pred_and_langid, mask)
-        if self.use_shared:
-            shared_repr = self.shared_encoder(embedded_text_with_pred_and_langid, mask)
-            intermediate_repr = torch.cat([lang_repr, shared_repr],-1)
-        else:
-            intermediate_repr = lang_repr
-        encoded_text = self.stacked_encoder(intermediate_repr, mask)
-
-        logits = self.tag_projection_layer(encoded_text)
         reshaped_log_probs = logits.view(-1, self.num_classes)
         class_probabilities = F.softmax(reshaped_log_probs).view([batch_size, 
                                                                   sequence_length, 
@@ -201,14 +244,13 @@ class SemanticRoleLabeler(Model):
             self.span_metric(class_probabilities, tags, mask)
             output_dict["arg_loss"] = arg_loss
 
-        """-------------------------------------------------------------------------------------------------"""
-
         """
+        ---------------------------------------------
         Get predicate sense predictions for the batch
         PSL: pred sense lemma
         PSD: pred sense disambiguation
+        ---------------------------------------------
         """
-
         # predicate sense encodings for valid senses
         _, psl_inds = pred_indicator.max(1) # 1-D, shape (batch_size), values index sequence_length dimension
         d0, d2 = encoded_text.size(0), encoded_text.size(2)
@@ -262,17 +304,12 @@ class SemanticRoleLabeler(Model):
             output_dict["psd_loss"] = psd_loss
             # combine loss, for backprop interface
             loss = arg_loss + psd_loss
-            #ipy.embed()
             output_dict["loss"] = loss
-            #output_dict["loss"] = arg_loss
 
         # We need to retain the mask in the output dictionary
         # so that we can crop the sequences to remove padding
         # when we do viterbi inference in self.decode.
-        # Probably don't need the same for the PSD mask, but
-        # we'll get to that later.
         output_dict["mask"] = mask
-        #output_dict["psd_mask"] = psd_mask
 
         return output_dict
 
@@ -358,16 +395,41 @@ class SemanticRoleLabeler(Model):
     def from_params(cls, vocab: Vocabulary, params: Params) -> 'SemanticRoleLabeler':
         embedder_params = params.pop("text_field_embedder")
         text_field_embedder = TextFieldEmbedder.from_params(vocab, embedder_params)
-        stacked_params = params.pop("stacked_encoder")
-        stacked_encoder = Seq2SeqEncoder.from_params(stacked_params.duplicate())
         binary_feature_dim = params.pop("binary_feature_dim")
 
+        encoders = {}
+        all_params = params.duplicate().as_dict()
+        for encoder_type in ['shared_encoder_a', 'shared_encoder_b']:
+            if encoder_type not in params.keys():
+                continue
+            shared_params = params.pop(encoder_type)
+            shared_encoder = Seq2SeqEncoder.from_params(shared_params.duplicate())
+            encoders[encoder_type] = [shared_encoder]
         languages = list(params.pop("languages").values())
         langid_dim = params.pop("langid_dim")
-        lang_params = params.pop("lang_encoder")
-        lang_encoders = [Seq2SeqEncoder.from_params(lang_params.duplicate()) for l in languages]
-        shared_encoder = Seq2SeqEncoder.from_params(lang_params.duplicate())
-        
+        for encoder_type in ['lang_encoder_a', 'lang_encoder_b']:
+            if encoder_type not in params.keys():
+                continue
+            lang_params = params.pop(encoder_type)
+            lang_encoders = [Seq2SeqEncoder.from_params(lang_params.duplicate()) for l in languages]
+            encoders[encoder_type] = lang_encoders
+        connections = params.pop("encoder_connections").as_dict()
+        for second_encoder_type in connections:
+            input_dim = all_params[second_encoder_type]['input_size']
+            second_depth = all_params[second_encoder_type]['num_layers']
+            output_dims = []
+            first_depths = []
+            for first_encoder_type in connections[second_encoder_type]:
+                if first_encoder_type not in encoders:
+                    raise ConfigurationError("Connection from nonexistent encoder")
+                output_dims.append(all_params[first_encoder_type]['hidden_size'])
+                first_depths.append(all_params[first_encoder_type]['num_layers'])
+            if sum(output_dims) != input_dim:
+                raise ConfigurationError("Input dim does not equal sum of output dims of connected encoders")
+            for depth in first_depths:
+                if depth + second_depth > 8:
+                    raise ConfigurationError("Stacked depth > 8 ({} + {})".format(depth, second_depth))
+
         init_params = params.pop('initializer', None)
         reg_params = params.pop('regularizer', None)
         initializer = (InitializerApplicator.from_params(init_params)
@@ -377,12 +439,11 @@ class SemanticRoleLabeler(Model):
 
         return cls(vocab=vocab,
                    text_field_embedder=text_field_embedder,
-                   stacked_encoder=stacked_encoder,
                    binary_feature_dim=binary_feature_dim,
                    languages=languages,
                    langid_dim=langid_dim,
-                   language_encoders=lang_encoders,
-                   shared_encoder=shared_encoder,
+                   encoders=encoders,
+                   connections=connections,
                    initializer=initializer,
                    regularizer=regularizer)
 
@@ -394,8 +455,9 @@ class SemanticRoleLabeler(Model):
                 copied to that device
         """
         self.dev_id = device_id
-        for lang_encoder in self.lang_encoders:
-            lang_encoder.cuda(self.dev_id)
+        for encoder_type in self.encoders:
+            for encoder in self.encoders[encoder_type]:
+                encoder.cuda(self.dev_id)
         return super(SemanticRoleLabeler, self).cuda()
 
 
