@@ -106,6 +106,8 @@ class SemanticRoleLabeler(Model):
         self.embedding_dropout = Dropout(p=embedding_dropout)
 
         for encoder_type in ['shared_encoder_a', 'lang_encoder_a']:
+            if encoder_type not in encoders:
+                continue
             for encoder in encoders[encoder_type]:
                 if text_field_embedder.get_output_dim() + binary_feature_dim + langid_dim != encoder.get_input_dim():
                     raise ConfigurationError("The SRL Model uses a binary predicate indicator feature, meaning "
@@ -196,7 +198,8 @@ class SemanticRoleLabeler(Model):
             shared_encoder = self.encoders["shared_encoder_a"][0]
             shared_repr = shared_encoder(embedded_text_with_pred_and_langid, mask)
             repr_list_a.append(shared_repr)
-        intermediate_repr = torch.cat(repr_list_a,-1)
+        if len(repr_list_a) > 0:
+            intermediate_repr = torch.cat(repr_list_a,-1)
 
         repr_list_b = []
         if "lang_encoder_b" in self.encoders:
@@ -424,8 +427,11 @@ class SemanticRoleLabeler(Model):
                     raise ConfigurationError("Connection from nonexistent encoder")
                 output_dims.append(all_params[first_encoder_type]['hidden_size'])
                 first_depths.append(all_params[first_encoder_type]['num_layers'])
-            if sum(output_dims) != input_dim:
+            if len(output_dims) > 0 and sum(output_dims) != input_dim:
+                ipy.embed()
                 raise ConfigurationError("Input dim does not equal sum of output dims of connected encoders")
+            elif text_field_embedder.get_output_dim() + binary_feature_dim + langid_dim != input_dim:
+                raise ConfigurationError("Input dim does not equal final embedding size")
             for depth in first_depths:
                 if depth + second_depth > 8:
                     raise ConfigurationError("Stacked depth > 8 ({} + {})".format(depth, second_depth))
