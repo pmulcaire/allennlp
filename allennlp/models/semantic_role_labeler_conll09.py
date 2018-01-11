@@ -410,6 +410,7 @@ class SemanticRoleLabeler(Model):
             encoders[encoder_type] = [shared_encoder]
         languages = list(params.pop("languages").values())
         langid_dim = params.pop("langid_dim")
+        embedding_dim = text_field_embedder.get_output_dim() + binary_feature_dim + langid_dim
         for encoder_type in ['lang_encoder_a', 'lang_encoder_b']:
             if encoder_type not in params.keys():
                 continue
@@ -428,9 +429,8 @@ class SemanticRoleLabeler(Model):
                 output_dims.append(all_params[first_encoder_type]['hidden_size'])
                 first_depths.append(all_params[first_encoder_type]['num_layers'])
             if len(output_dims) > 0 and sum(output_dims) != input_dim:
-                ipy.embed()
                 raise ConfigurationError("Input dim does not equal sum of output dims of connected encoders")
-            elif text_field_embedder.get_output_dim() + binary_feature_dim + langid_dim != input_dim:
+            elif len(output_dims) == 0 and embedding_dim != input_dim:
                 raise ConfigurationError("Input dim does not equal final embedding size")
             for depth in first_depths:
                 if depth + second_depth > 8:
