@@ -72,13 +72,15 @@ class SemanticRoleLabeler(Model):
         # for the predicate, because the predicate index is provided to the model.
         self.span_metric = SpanBasedF1Measure(vocab, tag_namespace="labels", ignore_classes=["V"])
 
-        self.stacked_encoder = stacked_encoder
-        
         self.languages = languages
         self.langid_embedding = Embedding(len(self.languages), langid_dim)
         self.lang_encoders = language_encoders
+        for idx, language in self.languages:
+            encoder_name = "{}_encoder".format(lang)
+            self.add_module(encoder_name, self.lang_encoders[idx])
         self.shared_encoder = shared_encoder
-        self.use_shared = False
+        self.stacked_encoder = stacked_encoder
+        self.use_shared = True
 
         # There are exactly 2 binary features for the predicate embedding.
         self.binary_feature_embedding = Embedding(2, binary_feature_dim)
@@ -93,18 +95,19 @@ class SemanticRoleLabeler(Model):
 
         self.embedding_dropout = Dropout(p=embedding_dropout)
 
-        if text_field_embedder.get_output_dim() + binary_feature_dim + langid_dim != self.lang_encoders[0].get_input_dim():
+        intermediate_dim = self.lang_encoders[0].get_output_dim() + self.shared_encoder.get_output_dim()
+        embedding_dim = text_field_embedder.get_output_dim() + binary_feature_dim + langid_dim
+        if embedding_dim != self.lang_encoders[0].get_input_dim():
             raise ConfigurationError("The SRL Model uses a binary predicate indicator feature, meaning "
                                      "the input dimension of the language-specific encoder must be equal to "
-                                     "the output dimension of the text_field_embedder + 1.")
-        if self.lang_encoders[0].get_output_dim() != self.stacked_encoder.get_input_dim():
-            if self.lang_encoders[0].get_output_dim() + self.shared_encoder.get_output_dim() != self.stacked_encoder.get_input_dim():
+                                     "the output dimension of the text_field_embedder + binary_feature_dim.")
+        if intermediate_dim != self.stacked_encoder.get_input_dim():
+            self.use_shared = False
+            if self.lang_encoders[0].get_output_dim() != self.stacked_encoder.get_input_dim():
                 raise ConfigurationError("the input dimension of the stacked_encoder must be equal to "
                                          "the output dimension of the language-specific encoder.")
-            else:
-                self.use_shared = True
-
         initializer(self)
+
 
     def forward(self,  # type: ignore
                 tokens: Dict[str, torch.LongTensor],
