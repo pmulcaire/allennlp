@@ -77,15 +77,19 @@ class SemanticRoleLabeler(Model):
         # For the span based evaluation, we don't want to consider labels
         # for the predicate, because the predicate index is provided to the model.
         self.span_metric = SpanBasedF1Measure(vocab, tag_namespace="labels", ignore_classes=["V"])
-
+        
         self.languages = languages
         self.langid_embedding = Embedding(len(self.languages), langid_dim)
         self.encoders = encoders
         self.connections = connections
-        if 'shared_encoder_a' in self.encoders or 'shared_encoder_b' in self.encoders:
-            self.use_shared = True
-        else:
-            self.use_shared = False
+        self.active_encoders = []
+        for encoder_type in connections:
+            self.active_encoders.append(encoder_type)
+            for src_encoder_type in connections[encoder_type]:
+                self.active_encoders.append(src_encoder_type)
+            for idx, encoder in enumerate(self.encoders[encoder_type]):
+                encoder_name = "{}_{}".format(idx, encoder_type)
+                self.add_module(encoder_name,encoder)
 
         self.output_dim = 0
         for encoder_type in ['shared_encoder_b', 'lang_encoder_b']:
@@ -168,8 +172,6 @@ class SemanticRoleLabeler(Model):
         # (batch_size, sequence_length, embedding_size)
         embedded_pred_indicator = self.binary_feature_embedding(pred_indicator.long()) 
         # (batch_size, sequence_length, binary_feature_dim)
-        embedded_langid = self.langid_embedding(langid.long())
-        # (batch_size, 1, binary_feature_dim)
         embedded_langids = self.langid_embedding(langid.long()).repeat(1,sequence_length,1)
 
         # Concatenate the predicate feature and langid onto the embedded text. This now has
@@ -190,17 +192,18 @@ class SemanticRoleLabeler(Model):
         langid_val = langid.data.max()
 
         repr_list_a = []
-        if "lang_encoder_a" in self.encoders:
+        if "lang_encoder_a" in self.active_encoders:
             lang_encoder = self.encoders["lang_encoder_a"][langid_val]
             lang_repr = lang_encoder(embedded_text_with_pred_and_langid, mask)
             repr_list_a.append(lang_repr)
-        if "shared_encoder_a" in self.encoders:
+        if "shared_encoder_a" in self.active_encoders:
             shared_encoder = self.encoders["shared_encoder_a"][0]
             shared_repr = shared_encoder(embedded_text_with_pred_and_langid, mask)
             repr_list_a.append(shared_repr)
         if len(repr_list_a) > 0:
             intermediate_repr = torch.cat(repr_list_a,-1)
 
+        quickval = False
         repr_list_b = []
         if "lang_encoder_b" in self.encoders:
             lang_encoder = self.encoders["lang_encoder_b"][langid_val]
@@ -227,16 +230,13 @@ class SemanticRoleLabeler(Model):
                 shared_repr_b = shared_encoder(embedded_text_with_pred_and_langid, mask)
             repr_list_b.append(shared_repr_b)
         encoded_text = torch.cat(repr_list_b,-1)
-
+        
         """
         -------------------------
         Get arg label predictions
         -------------------------
         """
-        try:
-            logits = self.tag_projection_layer(encoded_text)
-        except:
-            ipy.embed()
+        logits = self.tag_projection_layer(encoded_text)
         reshaped_log_probs = logits.view(-1, self.num_classes)
         class_probabilities = F.softmax(reshaped_log_probs).view([batch_size, 
                                                                   sequence_length, 
@@ -464,7 +464,7 @@ class SemanticRoleLabeler(Model):
         for encoder_type in self.encoders:
             for encoder in self.encoders[encoder_type]:
                 encoder.cuda(self.dev_id)
-        return super(SemanticRoleLabeler, self).cuda()
+        return super(SemanticRoleLabeler, self).cuda(device_id=self.dev_id)
 
 
 def write_to_conll_2012_eval_file(prediction_file: TextIO,
