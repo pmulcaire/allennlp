@@ -75,7 +75,7 @@ class SemanticRoleLabeler(Model):
         self.languages = languages
         self.langid_embedding = Embedding(len(self.languages), langid_dim)
         self.lang_encoders = language_encoders
-        for idx, language in self.languages:
+        for idx, lang in enumerate(self.languages):
             encoder_name = "{}_encoder".format(lang)
             self.add_module(encoder_name, self.lang_encoders[idx])
         self.shared_encoder = shared_encoder
