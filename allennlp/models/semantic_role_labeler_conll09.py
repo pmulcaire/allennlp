@@ -96,13 +96,15 @@ class SemanticRoleLabeler(Model):
         self.embedding_dropout = Dropout(p=embedding_dropout)
 
         intermediate_dim = self.lang_encoders[0].get_output_dim() + self.shared_encoder.get_output_dim()
+        self.inter_projection_layer = TimeDistributed(Linear(intermediate_dim,
+                                                             self.stacked_encoder.get_input_dim()))
+        
         embedding_dim = text_field_embedder.get_output_dim() + binary_feature_dim + langid_dim
         if embedding_dim != self.lang_encoders[0].get_input_dim():
             raise ConfigurationError("The SRL Model uses a binary predicate indicator feature, meaning "
                                      "the input dimension of the language-specific encoder must be equal to "
                                      "the output dimension of the text_field_embedder + binary_feature_dim.")
-        if intermediate_dim != self.stacked_encoder.get_input_dim():
-            self.use_shared = False
+        if self.use_shared == False:
             if self.lang_encoders[0].get_output_dim() != self.stacked_encoder.get_input_dim():
                 raise ConfigurationError("the input dimension of the stacked_encoder must be equal to "
                                          "the output dimension of the language-specific encoder.")
@@ -191,7 +193,9 @@ class SemanticRoleLabeler(Model):
             intermediate_repr = torch.cat([lang_repr, shared_repr],-1)
         else:
             intermediate_repr = lang_repr
-        encoded_text = self.stacked_encoder(intermediate_repr, mask)
+
+        stacked_input = self.inter_projection_layer(intermediate_repr)
+        encoded_text = self.stacked_encoder(stacked_input, mask)
 
         logits = self.tag_projection_layer(encoded_text)
         reshaped_log_probs = logits.view(-1, self.num_classes)
