@@ -73,7 +73,10 @@ class SemanticRoleLabeler(Model):
         self.span_metric = SpanBasedF1Measure(vocab, tag_namespace="labels", ignore_classes=["V"])
 
         self.languages = languages
-        self.langid_embedding = Embedding(len(self.languages), langid_dim)
+        if langid_dim > 0:
+            self.langid_embedding = Embedding(len(self.languages), langid_dim)
+        else:
+            self.langid_embedding = None
         self.lang_encoders = language_encoders
         for idx, lang in enumerate(self.languages):
             encoder_name = "{}_encoder".format(lang)
@@ -158,20 +161,19 @@ class SemanticRoleLabeler(Model):
 
         """
         mask = get_text_field_mask(tokens) # (batch_size, sequence_length)
-        embedded_text_input = self.embedding_dropout(self.text_field_embedder(tokens)) 
+        input_list = []
+        embedded_text_input = self.embedding_dropout(self.text_field_embedder(tokens))
         batch_size, sequence_length, embedding_size = embedded_text_input.size()
-        # (batch_size, sequence_length, embedding_size)
-        embedded_pred_indicator = self.binary_feature_embedding(pred_indicator.long()) 
-        # (batch_size, sequence_length, binary_feature_dim)
-        embedded_langid = self.langid_embedding(langid.long())
-        # (batch_size, 1, binary_feature_dim)
-        embedded_langids = self.langid_embedding(langid.long()).repeat(1,sequence_length,1)
-
+        input_list.append(embedded_text_input)
+        embedded_pred_indicator = self.binary_feature_embedding(pred_indicator.long())
+        input_list.append(embedded_pred_indicator)
+        if self.langid_embedding is not None:
+            embedded_langid = self.langid_embedding(langid.long())
+            embedded_langids = self.langid_embedding(langid.long()).repeat(1,sequence_length,1)
+            input_list.append(embedded_langids)
         # Concatenate the predicate feature and langid onto the embedded text. This now has
         # shape (batch_size, sequence_length, embedding_dim+binary_feature_dim+langid_dim).
-        embedded_text_with_pred_and_langid = torch.cat([embedded_text_input, 
-                                                        embedded_pred_indicator, 
-                                                        embedded_langids], -1)
+        embedded_text_with_pred_and_langid = torch.cat(input_list,-1)
         full_embedding_dim = embedded_text_with_pred_and_langid.size(2)
         
         if langid.data.max() != langid.data.min():
