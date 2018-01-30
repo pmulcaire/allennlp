@@ -41,7 +41,7 @@ class SemanticRoleLabeler(Model):
         A Vocabulary, required in order to compute sizes for input/output projections.
     text_field_embedder : ``TextFieldEmbedder``, required
         Used to embed the ``tokens`` ``TextField`` we get as input to the model.
-    binary_feature_dim : int, required.
+    predicate_dim : int, required.
         The dimensionality of the embedding of the binary predicate features.
     languages : ``List[str]``, required
         A list of language names.
@@ -60,9 +60,11 @@ class SemanticRoleLabeler(Model):
     """
     def __init__(self, vocab: Vocabulary,
                  text_field_embedder: TextFieldEmbedder,
-                 binary_feature_dim: int,
-                 languages: List[str],
                  langid_dim: int,
+                 langid_type: str,
+                 predicate_dim: int,
+                 predicate_type: str,
+                 languages: List[str],
                  encoders: Dict[str,List[Seq2SeqEncoder]],
                  connections: Dict[str,List[str]],
                  embedding_dropout: float = 0.0,
@@ -77,9 +79,16 @@ class SemanticRoleLabeler(Model):
         # For the span based evaluation, we don't want to consider labels
         # for the predicate, because the predicate index is provided to the model.
         self.span_metric = SpanBasedF1Measure(vocab, tag_namespace="labels", ignore_classes=["V"])
-        
+
+        # input features
         self.languages = languages
-        self.langid_embedding = Embedding(len(self.languages), langid_dim)
+        if langid_dim > 0:
+            self.langid_embedding = Embedding(len(self.languages), langid_dim)
+        else:
+            self.langid_embedding = None
+        self.predicate_embedding = Embedding(2, predicate_dim)
+
+        # encoders
         self.encoders = encoders
         self.connections = connections
         self.active_encoders = []
@@ -91,13 +100,21 @@ class SemanticRoleLabeler(Model):
                 encoder_name = "{}_{}".format(idx, encoder_type)
                 self.add_module(encoder_name,encoder)
 
+        # connections
         self.output_dim = 0
+        self.input_dim = text_field_embedder.get_output_dim()
         for encoder_type in ['shared_encoder_b', 'lang_encoder_b']:
             if encoder_type in self.encoders:
                 self.output_dim += self.encoders[encoder_type][0].get_output_dim()
+        if langid_type == "late":
+            self.output_dim += langid_dim
+        else:
+            self.input_dim += langid_dim
+        if predicate_type == "late":
+            self.output_dim += predicate_dim
+        else:
+            self.input_dim = predicate_dim
 
-        # There are exactly 2 binary features for the predicate embedding.
-        self.binary_feature_embedding = Embedding(2, binary_feature_dim)
         self.tag_projection_layer = TimeDistributed(Linear(self.output_dim,
                                                            self.num_classes))
         self.sense_weights = Parameter(torch.Tensor(self.num_senses, 
@@ -113,7 +130,7 @@ class SemanticRoleLabeler(Model):
             if encoder_type not in encoders:
                 continue
             for encoder in encoders[encoder_type]:
-                if text_field_embedder.get_output_dim() + binary_feature_dim + langid_dim != encoder.get_input_dim():
+                if text_field_embedder.get_output_dim() + predicate_dim + langid_dim != encoder.get_input_dim():
                     raise ConfigurationError("The SRL Model uses a binary predicate indicator feature, meaning "
                                              "the input dimension of the language-specific encoder must be equal to "
                                              "the output dimension of the text_field_embedder + 1.")
@@ -167,18 +184,18 @@ class SemanticRoleLabeler(Model):
 
         """
         mask = get_text_field_mask(tokens) # (batch_size, sequence_length)
+        early_input_list = []
         embedded_text_input = self.embedding_dropout(self.text_field_embedder(tokens)) 
+        early_input_list.append(embedded_text_input)
         batch_size, sequence_length, embedding_size = embedded_text_input.size()
-        # (batch_size, sequence_length, embedding_size)
-        embedded_pred_indicator = self.binary_feature_embedding(pred_indicator.long()) 
-        # (batch_size, sequence_length, binary_feature_dim)
-        embedded_langids = self.langid_embedding(langid.long()).repeat(1,sequence_length,1)
 
-        # Concatenate the predicate feature and langid onto the embedded text. This now has
-        # shape (batch_size, sequence_length, embedding_dim+binary_feature_dim+langid_dim).
-        embedded_text_with_pred_and_langid = torch.cat([embedded_text_input, 
-                                                        embedded_pred_indicator, 
-                                                        embedded_langids], -1)
+        if self.predicate_type is "early" and self.predicate_embedding is not None:
+            embedded_pred_indicator = self.predicate_embedding(pred_indicator.long())
+            early_input_list.append(embedded_pred_indicator)
+        if self.langid_type == "early" and self.langid_embedding is not None:
+            embedded_langids = self.langid_embedding(langid.long()).repeat(1,sequence_length,1)
+            early_input_list.append(embedded_langids)
+        embedded_text_with_pred_and_langid = torch.cat(early_input_list, -1)
         full_embedding_dim = embedded_text_with_pred_and_langid.size(2)
         
         """
@@ -200,6 +217,13 @@ class SemanticRoleLabeler(Model):
             shared_encoder = self.encoders["shared_encoder_a"][0]
             shared_repr = shared_encoder(embedded_text_with_pred_and_langid, mask)
             repr_list_a.append(shared_repr)
+
+        if self.predicate_type is "late" and self.predicate_embedding is not None:
+            embedded_pred_indicator = self.predicate_embedding(pred_indicator.long())
+            repr_list_a.append(embedded_pred_indicator)
+        if self.langid_type == "late" and self.langid_embedding is not None:
+            embedded_langids = self.langid_embedding(langid.long()).repeat(1,sequence_length,1)
+            repr_list_a.append(embedded_langids)
         if len(repr_list_a) > 0:
             intermediate_repr = torch.cat(repr_list_a,-1)
 
@@ -229,6 +253,13 @@ class SemanticRoleLabeler(Model):
             else: # no preceding encoders, so take original embeddings as inputs
                 shared_repr_b = shared_encoder(embedded_text_with_pred_and_langid, mask)
             repr_list_b.append(shared_repr_b)
+
+        if self.predicate_type is "end" and self.predicate_embedding is not None:
+            embedded_pred_indicator = self.predicate_embedding(pred_indicator.long())
+            repr_list_b.append(embedded_pred_indicator)
+        if self.langid_type == "end" and self.langid_embedding is not None:
+            embedded_langids = self.langid_embedding(langid.long()).repeat(1,sequence_length,1)
+            repr_list_b.append(embedded_langids)
         encoded_text = torch.cat(repr_list_b,-1)
         
         """
@@ -398,7 +429,14 @@ class SemanticRoleLabeler(Model):
     def from_params(cls, vocab: Vocabulary, params: Params) -> 'SemanticRoleLabeler':
         embedder_params = params.pop("text_field_embedder")
         text_field_embedder = TextFieldEmbedder.from_params(vocab, embedder_params)
-        binary_feature_dim = params.pop("binary_feature_dim")
+
+        # input features
+        langid_params = params.pop("langid")
+        langid_dim = langid_params.pop("dim")
+        langid_type = langid_params.pop("position")
+        predicate_params = params.pop("predicate_feature")
+        predicate_dim = predicate_params.pop("dim")
+        predicate_type = predicate_params.pop("position")
 
         encoders = {}
         all_params = params.duplicate().as_dict()
@@ -409,8 +447,7 @@ class SemanticRoleLabeler(Model):
             shared_encoder = Seq2SeqEncoder.from_params(shared_params.duplicate())
             encoders[encoder_type] = [shared_encoder]
         languages = list(params.pop("languages").values())
-        langid_dim = params.pop("langid_dim")
-        embedding_dim = text_field_embedder.get_output_dim() + binary_feature_dim + langid_dim
+        embedding_dim = text_field_embedder.get_output_dim() + predicate_dim + langid_dim
         for encoder_type in ['lang_encoder_a', 'lang_encoder_b']:
             if encoder_type not in params.keys():
                 continue
@@ -445,9 +482,11 @@ class SemanticRoleLabeler(Model):
 
         return cls(vocab=vocab,
                    text_field_embedder=text_field_embedder,
-                   binary_feature_dim=binary_feature_dim,
-                   languages=languages,
                    langid_dim=langid_dim,
+                   langid_type=langid_type,
+                   predicate_dim=predicate_dim,
+                   predicate_type=predicate_type,
+                   languages=languages,
                    encoders=encoders,
                    connections=connections,
                    initializer=initializer,
