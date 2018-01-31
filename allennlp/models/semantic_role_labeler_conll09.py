@@ -191,14 +191,14 @@ class SemanticRoleLabeler(Model):
         early_input_list.append(embedded_text_input)
         batch_size, sequence_length, embedding_size = embedded_text_input.size()
 
-        if self.predicate_type is "early" and self.predicate_embedding is not None:
+        if self.predicate_type == "early" and self.predicate_embedding is not None:
             embedded_pred_indicator = self.predicate_embedding(pred_indicator.long())
             early_input_list.append(embedded_pred_indicator)
         if self.langid_type == "early" and self.langid_embedding is not None:
             embedded_langids = self.langid_embedding(langid.long()).repeat(1,sequence_length,1)
             early_input_list.append(embedded_langids)
-        embedded_text_with_pred_and_langid = torch.cat(early_input_list, -1)
-        full_embedding_dim = embedded_text_with_pred_and_langid.size(2)
+        embedded_text_full = torch.cat(early_input_list, -1)
+        full_embedding_dim = embedded_text_full.size(2)
         
         """
         ------------------------------------
@@ -211,23 +211,26 @@ class SemanticRoleLabeler(Model):
         langid_val = langid.data.max()
 
         repr_list_a = []
+
         if "lang_encoder_a" in self.active_encoders:
             lang_encoder = self.encoders["lang_encoder_a"][langid_val]
-            lang_repr = lang_encoder(embedded_text_with_pred_and_langid, mask)
+            lang_repr = lang_encoder(embedded_text_full, mask)
             repr_list_a.append(lang_repr)
         if "shared_encoder_a" in self.active_encoders:
             shared_encoder = self.encoders["shared_encoder_a"][0]
-            shared_repr = shared_encoder(embedded_text_with_pred_and_langid, mask)
+            shared_repr = shared_encoder(embedded_text_full, mask)
             repr_list_a.append(shared_repr)
-
-        if self.predicate_type is "late" and self.predicate_embedding is not None:
+        if self.predicate_type == "late" and self.predicate_embedding is not None:
             embedded_pred_indicator = self.predicate_embedding(pred_indicator.long())
             repr_list_a.append(embedded_pred_indicator)
-        if self.langid_type == "late" and self.langid_embedding is not None:
-            embedded_langids = self.langid_embedding(langid.long()).repeat(1,sequence_length,1)
-            repr_list_a.append(embedded_langids)
         if len(repr_list_a) > 0:
             intermediate_repr = torch.cat(repr_list_a,-1)
+
+        if self.langid_type == "late" and self.langid_embedding is not None:
+            embedded_langids = self.langid_embedding(langid.long()).repeat(1,sequence_length,1)
+        if len(repr_list_a) > 0:
+            shared_repr = torch.cat([shared_repr, embedded_langids],-1)
+
 
         quickval = False
         repr_list_b = []
@@ -241,7 +244,7 @@ class SemanticRoleLabeler(Model):
             elif ("shared_encoder_a" in self.connections["lang_encoder_b"]):
                 lang_repr_b = lang_encoder(shared_repr, mask)
             else: # no preceding encoders, so take original embeddings as inputs
-                lang_repr_b = lang_encoder(embedded_text_with_pred_and_langid, mask)
+                lang_repr_b = lang_encoder(embedded_text_full, mask)
             repr_list_b.append(lang_repr_b)
         if "shared_encoder_b" in self.encoders:
             shared_encoder = self.encoders["shared_encoder_b"][0]
@@ -253,17 +256,17 @@ class SemanticRoleLabeler(Model):
             elif ("shared_encoder_a" in self.connections["shared_encoder_b"]):
                 shared_repr_b = shared_encoder(shared_repr, mask)
             else: # no preceding encoders, so take original embeddings as inputs
-                shared_repr_b = shared_encoder(embedded_text_with_pred_and_langid, mask)
+                shared_repr_b = shared_encoder(embedded_text_full, mask)
             repr_list_b.append(shared_repr_b)
 
-        if self.predicate_type is "end" and self.predicate_embedding is not None:
+        if self.predicate_type == "end" and self.predicate_embedding is not None:
             embedded_pred_indicator = self.predicate_embedding(pred_indicator.long())
             repr_list_b.append(embedded_pred_indicator)
         if self.langid_type == "end" and self.langid_embedding is not None:
             embedded_langids = self.langid_embedding(langid.long()).repeat(1,sequence_length,1)
             repr_list_b.append(embedded_langids)
         encoded_text = torch.cat(repr_list_b,-1)
-        
+
         """
         -------------------------
         Get arg label predictions
