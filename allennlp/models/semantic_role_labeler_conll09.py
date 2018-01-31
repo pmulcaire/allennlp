@@ -82,6 +82,8 @@ class SemanticRoleLabeler(Model):
 
         # input features
         self.languages = languages
+        self.langid_type = langid_type
+        self.predicate_type = predicate_type
         if langid_dim > 0:
             self.langid_embedding = Embedding(len(self.languages), langid_dim)
         else:
@@ -106,14 +108,14 @@ class SemanticRoleLabeler(Model):
         for encoder_type in ['shared_encoder_b', 'lang_encoder_b']:
             if encoder_type in self.encoders:
                 self.output_dim += self.encoders[encoder_type][0].get_output_dim()
-        if langid_type == "late":
+        if langid_type == "end":
             self.output_dim += langid_dim
-        else:
+        elif langid_type == "early":
             self.input_dim += langid_dim
-        if predicate_type == "late":
+        if predicate_type == "end":
             self.output_dim += predicate_dim
-        else:
-            self.input_dim = predicate_dim
+        elif predicate_type == "early":
+            self.input_dim += predicate_dim
 
         self.tag_projection_layer = TimeDistributed(Linear(self.output_dim,
                                                            self.num_classes))
@@ -130,7 +132,7 @@ class SemanticRoleLabeler(Model):
             if encoder_type not in encoders:
                 continue
             for encoder in encoders[encoder_type]:
-                if text_field_embedder.get_output_dim() + predicate_dim + langid_dim != encoder.get_input_dim():
+                if self.input_dim != encoder.get_input_dim():
                     raise ConfigurationError("The SRL Model uses a binary predicate indicator feature, meaning "
                                              "the input dimension of the language-specific encoder must be equal to "
                                              "the output dimension of the text_field_embedder + 1.")
@@ -465,6 +467,10 @@ class SemanticRoleLabeler(Model):
                     raise ConfigurationError("Connection from nonexistent encoder")
                 output_dims.append(all_params[first_encoder_type]['hidden_size'])
                 first_depths.append(all_params[first_encoder_type]['num_layers'])
+            if langid_type == "late":
+                output_dims.append(langid_dim)
+            if predicate_type == "late":
+                output_dims.append(predicate_dim)
             if len(output_dims) > 0 and sum(output_dims) != input_dim:
                 raise ConfigurationError("Input dim does not equal sum of output dims of connected encoders")
             elif len(output_dims) == 0 and embedding_dim != input_dim:
