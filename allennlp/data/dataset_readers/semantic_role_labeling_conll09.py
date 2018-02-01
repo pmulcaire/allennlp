@@ -235,7 +235,8 @@ class SrlReader(DatasetReader):
                                                                    sentence_count)
                             instances.extend(cur_instances)
                             try:
-                                assert instances[-1].sentence_id == sentence_count or len(cur_instances) == 0
+                                instance_sid = instances[-1].fields['metadata'].metadata['sentence_id']
+                                assert instance_sid == sentence_count or len(cur_instances) == 0
                             except:
                                 print("Problem with instance/sentence_id in dataset_readers/semantic_role_labeling_conll09.py")
                                 ipy.embed()
@@ -368,12 +369,13 @@ class SrlReader(DatasetReader):
         if self.for_training:
             fields['pred_sense'] = LabelField(pred_sense, label_namespace='senses', handle_unk=True)
 
-        inst = Instance(fields)
         if sentence_id is not None:
-            inst.sentence_id = sentence_id
+            fields['metadata'] = MetadataField({'sentence_id':sentence_id})
         else:
             print("Problem with instance/sentence_id in allennlp/data/dataset_readers/semantic_role_labeling_conll09.py")
             ipy.embed()
+
+        inst = Instance(fields)
         if pos_tags:
             # temp hack to ensure access during evaluate
             inst.pos_tags = pos_tags

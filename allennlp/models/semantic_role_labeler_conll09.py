@@ -1,4 +1,4 @@
-from typing import Dict, List, TextIO, Optional
+from typing import Dict, List, TextIO, Optional, Any
 
 from overrides import overrides
 import torch
@@ -18,7 +18,7 @@ from allennlp.models.model import Model
 from allennlp.nn import InitializerApplicator, RegularizerApplicator
 from allennlp.nn.util import get_text_field_mask, sequence_cross_entropy_with_logits, masked_cross_entropy
 from allennlp.nn.util import get_lengths_from_binary_sequence_mask, viterbi_decode
-from allennlp.training.metrics import SpanBasedF1Measure
+from allennlp.training.metrics import ExternalConllEval
 
 import IPython as ipy
 
@@ -66,7 +66,7 @@ class SemanticRoleLabeler(Model):
 
         # For the span based evaluation, we don't want to consider labels
         # for the predicate, because the predicate index is provided to the model.
-        self.span_metric = SpanBasedF1Measure(vocab, tag_namespace="labels", ignore_classes=["V"])
+        self.conll_metric = ExternalConllEval(vocab, ignore_classes=["V"])
 
         self.stacked_encoder = stacked_encoder
         # There are exactly 2 binary features for the predicate embedding.
@@ -95,6 +95,7 @@ class SemanticRoleLabeler(Model):
                 pred_sense_set: torch.LongTensor,
                 pred_sense: torch.LongTensor = None,
                 tags: torch.LongTensor = None,
+                metadata: List[Dict[str,Any]] = None,
                 calculate_loss: bool = True) -> Dict[str, torch.Tensor]:
         # pylint: disable=arguments-differ
         """
@@ -155,11 +156,13 @@ class SemanticRoleLabeler(Model):
         class_probabilities = F.softmax(reshaped_log_probs).view([batch_size, 
                                                                   sequence_length, 
                                                                   self.num_classes])
-        output_dict = {"logits": logits, "class_probabilities": class_probabilities}
+        output_dict = {"tokens": tokens, "pred_indicator": pred_indicator, 
+                       "pred_sense_set": pred_sense_set, "metadata": metadata,
+                       "logits": logits, "class_probabilities": class_probabilities}
         if tags is not None and calculate_loss:
             arg_loss = sequence_cross_entropy_with_logits(logits, tags, mask)
-            self.span_metric(class_probabilities, tags, mask)
             output_dict["arg_loss"] = arg_loss
+            output_dict["gold_tags"] = tags
 
         """-------------------------------------------------------------------------------------------------"""
 
@@ -211,28 +214,22 @@ class SemanticRoleLabeler(Model):
         output_dict["psd_logits"] = psd_logits
         output_dict["psd_probabilities"] = psd_probabilities
         output_dict["psd_scatter_inds"] = scatter_inds
-        
-        if pred_sense is not None and calculate_loss: #i.e. we have a gold answer and can backprop the loss from our predictions
-            _, targets = torch.eq(scatter_inds,pred_sense).max(1)
-            try:
-                psd_loss = F.cross_entropy(psd_logits.view(batch_size, compact_size), targets, size_average=True)
-            except Exception as e:
-                print(e)
-                ipy.embed()
-            output_dict["psd_loss"] = psd_loss
-            # combine loss, for backprop interface
-            loss = arg_loss + psd_loss
-            #ipy.embed()
-            output_dict["loss"] = loss
-            #output_dict["loss"] = arg_loss
 
         # We need to retain the mask in the output dictionary
         # so that we can crop the sequences to remove padding
         # when we do viterbi inference in self.decode.
-        # Probably don't need the same for the PSD mask, but
-        # we'll get to that later.
         output_dict["mask"] = mask
-        #output_dict["psd_mask"] = psd_mask
+
+        if pred_sense is not None and calculate_loss: #i.e. we have a gold answer and can backprop the loss from our predictions
+            _, targets = torch.eq(scatter_inds,pred_sense).max(1)
+            psd_loss = F.cross_entropy(psd_logits.view(batch_size, compact_size), targets, size_average=True)
+            output_dict["psd_loss"] = psd_loss
+            output_dict["gold_sense"] = pred_sense
+            # combine loss, for backprop interface
+            loss = arg_loss + psd_loss
+            output_dict["loss"] = loss
+            decode_output = self.decode(output_dict)
+            self.conll_metric(decode_output)
 
         return output_dict
 
@@ -271,7 +268,7 @@ class SemanticRoleLabeler(Model):
         return output_dict
 
     def get_metrics(self, reset: bool = False):
-        metric_dict = self.span_metric.get_metric(reset=reset)
+        metric_dict = self.conll_metric.get_metric(reset=reset)
         if self.training:
             # This can be a lot of metrics, as there are 3 per class.
             # During training, we only really care about the overall

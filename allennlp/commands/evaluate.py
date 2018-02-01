@@ -131,7 +131,10 @@ def evaluate_predict(model: Model,
             # guess it with a heuristic
             tok_lemma = instance.fields['pred_sense_set'].index_label
             predicted_sense = tok_lemma.split(':')[-1] + '.01'
-        sid = instance.sentence_id
+        if instance.sentence_id:
+            sid = instance.sentence_id
+        else:
+            sid = instance.fields["metadata"].metadata["sentence_id"]
         if sid in all_words:
             assert all_words[sid] == words
         else:
