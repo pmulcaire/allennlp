@@ -273,13 +273,14 @@ class SrlReader(DatasetReader):
                             label = annotation.strip("()*")
                             if "_" in annotation:
                                 # This word isn't an argument for this predicate.
-                                predicate_argument_labels[annotation_index].append("O")
+                                bio_label = "O"
                             else:
                                 # The word is an arg with a particular semantic role label.
                                 # Append the label to the 'predicate_argument_labels' list
                                 # for the current predicate (indexed by 'annotation_index')
                                 bio_label = "B-" + label
-                                predicate_argument_labels[annotation_index].append(bio_label)
+                            label += '~' + lang
+                            predicate_argument_labels[annotation_index].append(bio_label)
 
                         # If this word is as a predicate, we need to record its index.
                         # This also has the side effect of ordering the predicates by 
@@ -296,6 +297,7 @@ class SrlReader(DatasetReader):
             lang_instances[lang] = instances
 
         instances = self.balance_by_instances(lang_instances)
+        
 
         if not instances:
             raise ConfigurationError("No instances were read from the given filepath {}. "

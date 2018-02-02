@@ -66,7 +66,7 @@ class ExternalConllEval(Metric):
         self.all_predicted_senses = defaultdict(list)
         self.all_gold_tags = defaultdict(list)
         self.all_predicted_tags = defaultdict(list)
-
+        self.populated = False
 
     def __call__(self,
                  token_inds,
@@ -81,6 +81,7 @@ class ExternalConllEval(Metric):
         ----------
         decode_output: the output dictionary from model.decode()
         """
+        self.populated = True
         token_vals = token_inds["tokens"].data
         batch_len = len(token_vals)
         
@@ -157,9 +158,14 @@ class ExternalConllEval(Metric):
             self.reset()
 
         all_metrics = {}
-        all_metrics["precision-overall"] = float(precision)
-        all_metrics["recall-overall"] = float(recall)
-        all_metrics["f1-measure-overall"] = float(f1_measure)
+        try:
+            all_metrics["precision-overall"] = float(precision)
+            all_metrics["recall-overall"] = float(recall)
+            all_metrics["f1-measure-overall"] = float(f1_measure)
+        except:
+            ipy.embed()
+        if float(precision) > 50:
+            ipy.embed()
         return all_metrics
 
 
@@ -185,7 +191,7 @@ class ExternalConllEval(Metric):
         self.all_predicted_senses = defaultdict(list)
         self.all_gold_tags = defaultdict(list)
         self.all_predicted_tags = defaultdict(list)
-
+        self.populated = True
 
 def write_to_conll_2009_eval_file(prediction_file: TextIO,
                                   gold_file: TextIO,
@@ -255,6 +261,8 @@ def write_to_conll_2009_eval_file(prediction_file: TextIO,
             predicate_tags = predicted_tags[unsorted_num]
             if predicate_tags[idx] != 'O':
                 tag = predicate_tags[idx]
+                if '~' in tag:
+                    tag = '~'.join(tag.split('~')[:-1])
                 line[14+predicate_num] = '-'.join(tag.split('-')[1:]) # remove the B- from the beginning of the tag
         prediction_file.write('\t'.join(line)+'\n')
         prediction_file.flush()
@@ -271,6 +279,8 @@ def write_to_conll_2009_eval_file(prediction_file: TextIO,
                 tag = '_'
             elif 'B-' in tag[:2]:
                 tag = '-'.join(tag.split('-')[1:])
+            if '~' in tag:
+                tag = '~'.join(tag.split('~')[:-1])
             line[14+predicate_num] = tag
         gold_file.write('\t'.join(line)+'\n')
         gold_file.flush()

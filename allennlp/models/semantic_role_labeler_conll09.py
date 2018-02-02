@@ -60,6 +60,8 @@ class SemanticRoleLabeler(Model):
                  regularizer: Optional[RegularizerApplicator] = None) -> None:
         super(SemanticRoleLabeler, self).__init__(vocab, regularizer)
 
+        self.dev_id = None
+
         self.text_field_embedder = text_field_embedder
         self.num_classes = self.vocab.get_vocab_size("labels")
         self.num_senses = self.vocab.get_vocab_size("senses")
@@ -189,10 +191,16 @@ class SemanticRoleLabeler(Model):
             valid_set = self.sense_weights.index_select(0,row_inds)
             if len(row_inds) < compact_size:
                 zeros = np.zeros((compact_size - row_inds.size(0), embedding_size))
-                emb_padding = Variable(torch.cuda.FloatTensor(zeros,device=self.dev_id))
+                if self.dev_id is not None:
+                    emb_padding = Variable(torch.cuda.FloatTensor(zeros,device=self.dev_id))
+                else:
+                    emb_padding = Variable(torch.FloatTensor(zeros))
                 valid_set = torch.cat([valid_set, emb_padding],0)
                 ind_negs = -np.ones((compact_size - row_inds.size(0),),np.int64)
-                ind_padding = Variable(torch.from_numpy(ind_negs).cuda(device=self.dev_id))
+                if self.dev_id is not None:
+                    ind_padding = Variable(torch.from_numpy(ind_negs).cuda(device=self.dev_id))
+                else:
+                    ind_padding = Variable(torch.from_numpy(ind_negs))
                 row_inds = torch.cat([row_inds, ind_padding],0)
             valid_sets.append(valid_set)
             valid_inds.append(row_inds)
@@ -203,7 +211,10 @@ class SemanticRoleLabeler(Model):
         # (batch_size x compact_size)
         psd_logits = torch.matmul(sense_embs, psl_encodings.permute(0,2,1))
         # set padding values to negative infinity
-        negative_mask = Variable(torch.cuda.FloatTensor(psd_logits.size(), device=self.dev_id).zero_())
+        if self.dev_id is not None:
+            negative_mask = Variable(torch.cuda.FloatTensor(psd_logits.size(), device=self.dev_id).zero_())
+        else:
+            negative_mask = Variable(torch.FloatTensor(psd_logits.size()).zero_())
         negative_mask[psd_mask.lt(1)] = -np.inf
         masked_psd_logits = psd_logits + negative_mask
         compact_psd_probabilities = F.softmax(masked_psd_logits.view(batch_size, compact_size))
@@ -272,7 +283,9 @@ class SemanticRoleLabeler(Model):
         return output_dict
 
     def get_metrics(self, reset: bool = False):
-        metric_dict = self.conll_metric.get_metric(reset=reset)
+        metric_dict = {}
+        if self.conll_metric.populated:
+            metric_dict = self.conll_metric.get_metric(reset=reset)
         metric_dict2 = self.span_metric.get_metric(reset=reset)
         if "f1-measure-overall" in metric_dict2:
             metric_dict['span-f1-overall'] = metric_dict2["f1-measure-overall"]
