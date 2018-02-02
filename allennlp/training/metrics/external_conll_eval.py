@@ -68,58 +68,51 @@ class ExternalConllEval(Metric):
         self.all_predicted_tags = defaultdict(list)
 
 
-    def __call__(self, decode_output: Dict):
+    def __call__(self,
+                 token_inds,
+                 pred_indicators,
+                 tags,
+                 pred_sense_sets,
+                 senses,
+                 sentence_ids,
+                 decode_output: Dict):
         """
         Parameters
         ----------
         decode_output: the output dictionary from model.decode()
         """
-        tokens = decode_output["tokens"]["tokens"].data
-        batch_len = len(tokens)
+        token_vals = token_inds["tokens"].data
+        batch_len = len(token_vals)
         
         for i in range(batch_len):
             words = []
-            for v in tokens[i]:
+            for v in token_vals[i]:
                 if v != 0:
                     word = self._token_vocabulary[v]
                     words.append(word)
             length = len(words)
 
-            pred_indices = list(decode_output['pred_indicator'].data[i])[:length]
+            pred_indices = list(pred_indicators.data[i])[:length]
 
             gold_tags = []
-            for v in decode_output['gold_tags'].data[i][:length]:
+            for v in tags.data[i][:length]:
                 tag = 'O'
                 if v != 0: tag = self._tag_vocabulary[v]
                 gold_tags.append(tag)
 
-            gold_senses = []
-            for v in decode_output['gold_sense'].data[i]:
-                sense = self._sense_vocabulary[v]
-                gold_senses.append(sense)
+            gold_sense = self._sense_vocabulary[senses.data[i,0]]
 
             predicted_tags = decode_output['tags'][i]
             predicted_sense = decode_output['sense'][i]
-            if predicted_sense == self.oov:
-                # not a real predicate sense, because we didn't recognize the predicate
-                # guess it with a heuristic
-                tok_lemma = decode_output['pred_sense_set']
-                print("\n Working on predicate heuristic \n")
-                ipy.embed()
-                predicted_sense = tok_lemma.split(':')[-1] + '.01'
 
-            sid = decode_output['metadata'][i]['sentence_id']
+            sid = sentence_ids[i]['sentence_id']
             if sid in self.all_words:
-                try:
-                    assert self.all_words[sid] == words
-                except:
-                    print("\n Word sequence mismatch between instances with the same sentence ID\n")
-                    ipy.embed()
+                assert self.all_words[sid] == words
             else:
                 self.all_words[sid] = words
 
             self.all_predicate_inds[sid].append(pred_indices)
-            self.all_gold_senses[sid] += gold_senses
+            self.all_gold_senses[sid].append(gold_sense)
             self.all_predicted_senses[sid].append(predicted_sense)
             self.all_gold_tags[sid].append(gold_tags)
             self.all_predicted_tags[sid].append(predicted_tags)
@@ -139,7 +132,8 @@ class ExternalConllEval(Metric):
         """
         predict_file = open(self.predict_filename, 'w')
         gold_file = open(self.gold_filename, 'w')
-        for sid in self.all_words:
+        sorted_keys = sorted(self.all_words.keys())
+        for sid in sorted_keys:
             write_to_conll_2009_eval_file(predict_file, gold_file,
                                           self.all_words[sid],
                                           self.all_predicate_inds[sid],
@@ -229,7 +223,12 @@ def write_to_conll_2009_eval_file(prediction_file: TextIO,
     gold_only_sentence = ["_"] * len(sentence)
     pred_indicators = ["_"] * len(sentence)
 
+    predicates_by_idx = {}
     for i, pred_index_set in enumerate(pred_indices):
+        if len(pred_indices) > 1:
+            predicates_by_idx[pred_index_set.index(1)] = i
+        else:
+            predicates_by_idx[0] = i
         for pidx, val in enumerate(pred_index_set):
             if val:
                 pred_only_sentence[pidx] = predicted_senses[i]
@@ -251,20 +250,28 @@ def write_to_conll_2009_eval_file(prediction_file: TextIO,
         if pred_indicators[idx] == 'Y':
             line[12] = pred_indicators[idx]
             line[13] = pred_only_sentence[idx]
-        for i, predicate_tags in enumerate(predicted_tags):
+        for predicate_num, predicate_idx in enumerate(sorted(predicates_by_idx.keys())):
+            unsorted_num = predicates_by_idx[predicate_idx]
+            predicate_tags = predicted_tags[unsorted_num]
             if predicate_tags[idx] != 'O':
                 tag = predicate_tags[idx]
-                line[14+i] = '-'.join(tag.split('-')[1:]) # remove the B- from the beginning of the tag
+                line[14+predicate_num] = '-'.join(tag.split('-')[1:]) # remove the B- from the beginning of the tag
         prediction_file.write('\t'.join(line)+'\n')
         prediction_file.flush()
         lines.append(line)
 
         if pred_indicators[idx] == 'Y':
             line[13] = gold_only_sentence[idx]
-        for i, predicate_tags in enumerate(gold_tags):
+
+        for predicate_num, predicate_idx in enumerate(sorted(predicates_by_idx.keys())):
+            unsorted_num = predicates_by_idx[predicate_idx]
+            predicate_tags = gold_tags[unsorted_num]
             tag = predicate_tags[idx]
-            if 'B-' in tag[:2]: tag = '-'.join(tag.split('-')[1:])
-            line[14+i] = tag
+            if tag == 'O':
+                tag = '_'
+            elif 'B-' in tag[:2]:
+                tag = '-'.join(tag.split('-')[1:])
+            line[14+predicate_num] = tag
         gold_file.write('\t'.join(line)+'\n')
         gold_file.flush()
 

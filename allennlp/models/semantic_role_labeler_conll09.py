@@ -18,7 +18,7 @@ from allennlp.models.model import Model
 from allennlp.nn import InitializerApplicator, RegularizerApplicator
 from allennlp.nn.util import get_text_field_mask, sequence_cross_entropy_with_logits, masked_cross_entropy
 from allennlp.nn.util import get_lengths_from_binary_sequence_mask, viterbi_decode
-from allennlp.training.metrics import ExternalConllEval
+from allennlp.training.metrics import ExternalConllEval, SpanBasedF1Measure
 
 import IPython as ipy
 
@@ -67,6 +67,7 @@ class SemanticRoleLabeler(Model):
         # For the span based evaluation, we don't want to consider labels
         # for the predicate, because the predicate index is provided to the model.
         self.conll_metric = ExternalConllEval(vocab, ignore_classes=["V"])
+        self.span_metric = SpanBasedF1Measure(vocab, ignore_classes=["V"])
 
         self.stacked_encoder = stacked_encoder
         # There are exactly 2 binary features for the predicate embedding.
@@ -156,13 +157,10 @@ class SemanticRoleLabeler(Model):
         class_probabilities = F.softmax(reshaped_log_probs).view([batch_size, 
                                                                   sequence_length, 
                                                                   self.num_classes])
-        output_dict = {"tokens": tokens, "pred_indicator": pred_indicator, 
-                       "pred_sense_set": pred_sense_set, "metadata": metadata,
-                       "logits": logits, "class_probabilities": class_probabilities}
+        output_dict = {"logits": logits, "class_probabilities": class_probabilities}
         if tags is not None and calculate_loss:
             arg_loss = sequence_cross_entropy_with_logits(logits, tags, mask)
             output_dict["arg_loss"] = arg_loss
-            output_dict["gold_tags"] = tags
 
         """-------------------------------------------------------------------------------------------------"""
 
@@ -224,12 +222,18 @@ class SemanticRoleLabeler(Model):
             _, targets = torch.eq(scatter_inds,pred_sense).max(1)
             psd_loss = F.cross_entropy(psd_logits.view(batch_size, compact_size), targets, size_average=True)
             output_dict["psd_loss"] = psd_loss
-            output_dict["gold_sense"] = pred_sense
             # combine loss, for backprop interface
             loss = arg_loss + psd_loss
             output_dict["loss"] = loss
             decode_output = self.decode(output_dict)
-            self.conll_metric(decode_output)
+            if not self.training:
+                self.conll_metric(token_inds=tokens,
+                                  pred_indicators=pred_indicator,
+                                  tags=tags,
+                                  pred_sense_sets=pred_sense_set,
+                                  senses=pred_sense,
+                                  sentence_ids=metadata,
+                                  decode_output=decode_output)
 
         return output_dict
 
@@ -269,6 +273,9 @@ class SemanticRoleLabeler(Model):
 
     def get_metrics(self, reset: bool = False):
         metric_dict = self.conll_metric.get_metric(reset=reset)
+        metric_dict2 = self.span_metric.get_metric(reset=reset)
+        if "f1-measure-overall" in metric_dict2:
+            metric_dict['span-f1-overall'] = metric_dict2["f1-measure-overall"]
         if self.training:
             # This can be a lot of metrics, as there are 3 per class.
             # During training, we only really care about the overall
