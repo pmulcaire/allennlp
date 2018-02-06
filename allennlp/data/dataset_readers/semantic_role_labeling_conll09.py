@@ -237,7 +237,8 @@ class SrlReader(DatasetReader):
                                                                    sentence_count)
                             instances.extend(cur_instances)
                             try:
-                                assert instances[-1].sentence_id == sentence_count or len(cur_instances) == 0
+                                instance_sid = instances[-1].fields['metadata'].metadata['sentence_id']
+                                assert instance_sid == sentence_count or len(cur_instances) == 0
                             except:
                                 print("Problem with instance/sentence_id in dataset_readers/semantic_role_labeling_conll09.py")
                                 ipy.embed()
@@ -274,13 +275,14 @@ class SrlReader(DatasetReader):
                             label = annotation.strip("()*")
                             if "_" in annotation:
                                 # This word isn't an argument for this predicate.
-                                predicate_argument_labels[annotation_index].append("O")
+                                bio_label = "O"
                             else:
                                 # The word is an arg with a particular semantic role label.
                                 # Append the label to the 'predicate_argument_labels' list
                                 # for the current predicate (indexed by 'annotation_index')
                                 bio_label = "B-" + label
-                                predicate_argument_labels[annotation_index].append(bio_label)
+                            label += '~' + lang
+                            predicate_argument_labels[annotation_index].append(bio_label)
 
                         # If this word is as a predicate, we need to record its index.
                         # This also has the side effect of ordering the predicates by 
@@ -297,6 +299,7 @@ class SrlReader(DatasetReader):
             lang_instances[lang] = instances
 
         instances = self.balance_by_instances(lang_instances)
+        
 
         if not instances:
             raise ConfigurationError("No instances were read from the given filepath {}. "
@@ -372,12 +375,13 @@ class SrlReader(DatasetReader):
         if self.for_training:
             fields['pred_sense'] = LabelField(pred_sense, label_namespace='senses', handle_unk=True)
 
-        inst = Instance(fields)
         if sentence_id is not None:
-            inst.sentence_id = sentence_id
+            fields['metadata'] = MetadataField({'sentence_id':sentence_id})
         else:
             print("Problem with instance/sentence_id in allennlp/data/dataset_readers/semantic_role_labeling_conll09.py")
             ipy.embed()
+
+        inst = Instance(fields)
         if pos_tags:
             # temp hack to ensure access during evaluate
             inst.pos_tags = pos_tags

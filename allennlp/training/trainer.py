@@ -139,6 +139,7 @@ class Trainer:
         self._no_tqdm = no_tqdm
 
         if self._cuda_device >= 0:
+            torch.cuda.set_device(self._cuda_device)
             self._model = self._model.cuda(self._cuda_device)
 
         self._log_interval = 10  # seconds
