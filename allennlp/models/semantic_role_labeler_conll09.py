@@ -1,4 +1,4 @@
-from typing import Dict, List, TextIO, Optional
+from typing import Dict, List, TextIO, Optional, Any
 
 from overrides import overrides
 import torch
@@ -18,7 +18,7 @@ from allennlp.models.model import Model
 from allennlp.nn import InitializerApplicator, RegularizerApplicator
 from allennlp.nn.util import get_text_field_mask, sequence_cross_entropy_with_logits, masked_cross_entropy
 from allennlp.nn.util import get_lengths_from_binary_sequence_mask, viterbi_decode
-from allennlp.training.metrics import SpanBasedF1Measure
+from allennlp.training.metrics import ExternalConllEval, SpanBasedF1Measure
 
 import IPython as ipy
 
@@ -62,12 +62,15 @@ class SemanticRoleLabeler(Model):
                  regularizer: Optional[RegularizerApplicator] = None) -> None:
         super(SemanticRoleLabeler, self).__init__(vocab, regularizer)
 
+        self.dev_id = None
+
         self.text_field_embedder = text_field_embedder
         self.num_classes = self.vocab.get_vocab_size("labels")
         self.num_senses = self.vocab.get_vocab_size("senses")
 
         # For the span based evaluation, we don't want to consider labels
         # for the predicate, because the predicate index is provided to the model.
+        self.conll_metric = ExternalConllEval(vocab, ignore_classes=["V"])
         self.span_metric = SpanBasedF1Measure(vocab, tag_namespace="labels", ignore_classes=["V"])
 
         self.stacked_encoder = stacked_encoder
@@ -102,6 +105,7 @@ class SemanticRoleLabeler(Model):
                 pred_sense_set: torch.LongTensor,
                 pred_sense: torch.LongTensor = None,
                 tags: torch.LongTensor = None,
+                metadata: List[Dict[str,Any]] = None,
                 calculate_loss: bool = True) -> Dict[str, torch.Tensor]:
         # pylint: disable=arguments-differ
         """
@@ -206,10 +210,16 @@ class SemanticRoleLabeler(Model):
             valid_set = self.sense_weights.index_select(0,row_inds)
             if len(row_inds) < compact_size:
                 zeros = np.zeros((compact_size - row_inds.size(0), embedding_size))
-                emb_padding = Variable(torch.cuda.FloatTensor(zeros,device=self.dev_id))
+                if self.dev_id is not None:
+                    emb_padding = Variable(torch.cuda.FloatTensor(zeros,device=self.dev_id))
+                else:
+                    emb_padding = Variable(torch.FloatTensor(zeros))
                 valid_set = torch.cat([valid_set, emb_padding],0)
                 ind_negs = -np.ones((compact_size - row_inds.size(0),),np.int64)
-                ind_padding = Variable(torch.from_numpy(ind_negs).cuda(device=self.dev_id))
+                if self.dev_id is not None:
+                    ind_padding = Variable(torch.from_numpy(ind_negs).cuda(device=self.dev_id))
+                else:
+                    ind_padding = Variable(torch.from_numpy(ind_negs))
                 row_inds = torch.cat([row_inds, ind_padding],0)
             valid_sets.append(valid_set)
             valid_inds.append(row_inds)
@@ -220,7 +230,10 @@ class SemanticRoleLabeler(Model):
         # (batch_size x compact_size)
         psd_logits = torch.matmul(sense_embs, psl_encodings.permute(0,2,1))
         # set padding values to negative infinity
-        negative_mask = Variable(torch.cuda.FloatTensor(psd_logits.size(), device=self.dev_id).zero_())
+        if self.dev_id is not None:
+            negative_mask = Variable(torch.cuda.FloatTensor(psd_logits.size(), device=self.dev_id).zero_())
+        else:
+            negative_mask = Variable(torch.FloatTensor(psd_logits.size()).zero_())
         negative_mask[psd_mask.lt(1)] = -np.inf
         masked_psd_logits = psd_logits + negative_mask
         compact_psd_probabilities = F.softmax(masked_psd_logits.view(batch_size, compact_size))
@@ -229,28 +242,29 @@ class SemanticRoleLabeler(Model):
         output_dict["psd_logits"] = psd_logits
         output_dict["psd_probabilities"] = psd_probabilities
         output_dict["psd_scatter_inds"] = scatter_inds
-        
-        if pred_sense is not None and calculate_loss: #i.e. we have a gold answer and can backprop the loss from our predictions
-            _, targets = torch.eq(scatter_inds,pred_sense).max(1)
-            try:
-                psd_loss = F.cross_entropy(psd_logits.view(batch_size, compact_size), targets, size_average=True)
-            except Exception as e:
-                print(e)
-                ipy.embed()
-            output_dict["psd_loss"] = psd_loss
-            # combine loss, for backprop interface
-            loss = arg_loss + psd_loss
-            #ipy.embed()
-            output_dict["loss"] = loss
-            #output_dict["loss"] = arg_loss
 
         # We need to retain the mask in the output dictionary
         # so that we can crop the sequences to remove padding
         # when we do viterbi inference in self.decode.
-        # Probably don't need the same for the PSD mask, but
-        # we'll get to that later.
         output_dict["mask"] = mask
-        #output_dict["psd_mask"] = psd_mask
+
+        if pred_sense is not None and calculate_loss: #i.e. we have a gold answer and can backprop the loss from our predictions
+            _, targets = torch.eq(scatter_inds,pred_sense).max(1)
+            psd_loss = F.cross_entropy(psd_logits.view(batch_size, compact_size), targets, size_average=True)
+            output_dict["psd_loss"] = psd_loss
+            # combine loss, for backprop interface
+            loss = arg_loss + psd_loss
+            output_dict["loss"] = loss
+            if not self.training:
+                sense_predictions = self.decode_senses(output_dict)['sense']
+                self.conll_metric(token_inds=tokens,
+                                  pred_indicators=pred_indicator,
+                                  gold_tags=tags,
+                                  tag_probabilities=class_probabilities,
+                                  pred_sense_sets=pred_sense_set,
+                                  gold_senses=pred_sense,
+                                  sense_predictions=sense_predictions,
+                                  sentence_ids=metadata)
 
         return output_dict
 
@@ -261,6 +275,11 @@ class SemanticRoleLabeler(Model):
         constraint simply specifies that the output tags must be a valid BIO sequence.  We add a
         ``"tags"`` key to the dictionary with the result.
         """
+        decode_dict = self.decode_tags(output_dict)
+        decode_dict = self.decode_senses(output_dict)
+        return output_dict
+
+    def decode_tags(self, output_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         all_predictions = output_dict['class_probabilities']
         sequence_lengths = get_lengths_from_binary_sequence_mask(output_dict["mask"]).data.tolist()
 
@@ -276,7 +295,9 @@ class SemanticRoleLabeler(Model):
                     for x in max_likelihood_sequence]
             all_tags.append(tags)
         output_dict['tags'] = all_tags
+        return output_dict
 
+    def decode_senses(self, output_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         sense_probabilities = output_dict['psd_probabilities']
         max_prob, indices = torch.max(sense_probabilities,1)
         all_senses = []
@@ -285,11 +306,15 @@ class SemanticRoleLabeler(Model):
             predicted_sense = self.vocab.get_token_from_index(prediction_index, namespace="senses")
             all_senses.append(predicted_sense)
         output_dict['sense'] = all_senses
-
         return output_dict
 
     def get_metrics(self, reset: bool = False):
-        metric_dict = self.span_metric.get_metric(reset=reset)
+        metric_dict = {}
+        if self.conll_metric.populated and reset:
+            metric_dict = self.conll_metric.get_metric(reset=reset)
+        metric_dict2 = self.span_metric.get_metric(reset=reset)
+        if "f1-measure-overall" in metric_dict2:
+            metric_dict['span-f1-overall'] = metric_dict2["f1-measure-overall"]
         if self.training:
             # This can be a lot of metrics, as there are 3 per class.
             # During training, we only really care about the overall
@@ -366,7 +391,7 @@ class SemanticRoleLabeler(Model):
                 copied to that device
         """
         self.dev_id = device_id
-        return super(SemanticRoleLabeler, self).cuda()
+        return super(SemanticRoleLabeler, self).cuda(device_id=self.dev_id)
 
 
 def write_to_conll_2012_eval_file(prediction_file: TextIO,

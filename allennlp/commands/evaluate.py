@@ -28,6 +28,8 @@ import tqdm
 import os
 from collections import defaultdict
 
+import torch
+
 from allennlp.common.util import prepare_environment
 from allennlp.data import Dataset
 from allennlp.data.dataset_readers.dataset_reader import DatasetReader
@@ -36,7 +38,7 @@ from allennlp.models.archival import load_archive
 from allennlp.models.model import Model
 from allennlp.nn.util import arrays_to_variables
 
-from allennlp.models.semantic_role_labeler_conll09 import write_to_conll_2009_eval_file
+from allennlp.training.metrics.external_conll_eval import write_to_conll_2009_eval_file
 import IPython as ipy
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
@@ -87,7 +89,7 @@ def evaluate(model: Model,
         description = ', '.join(["%s: %.2f" % (name, value) for name, value in metrics.items()]) + " ||"
         generator_tqdm.set_description(description)
 
-    return model.get_metrics()
+    return model.get_metrics(reset=True)
 
 
 def evaluate_predict(model: Model,
@@ -118,9 +120,10 @@ def evaluate_predict(model: Model,
         output = model.forward_on_instance(instance, cuda_device, calculate_loss=False)
         predicted_tags = output['tags']
         pos_tags = instance.pos_tags
-        #gold_senses = instance.fields['pred_sense'].label
-        #gold_tags = instance.fields['tags'].labels
-        words = instance.fields['tokens'].tokens
+        gold_senses = instance.fields['pred_sense'].label
+        gold_tags = instance.fields['tags'].labels
+        tokens = instance.fields['tokens'].tokens
+        words = [t.text for t in tokens]
         pred_indices = instance.fields['pred_indicator'].labels
         
         sense_probabilities = output['psd_probabilities']
@@ -131,24 +134,27 @@ def evaluate_predict(model: Model,
             # guess it with a heuristic
             tok_lemma = instance.fields['pred_sense_set'].index_label
             predicted_sense = tok_lemma.split(':')[-1] + '.01'
-        sid = instance.sentence_id
+        if hasattr(instance,'sentence_id'):
+            sid = instance.sentence_id
+        else:
+            sid = instance.fields["metadata"].metadata["sentence_id"]
         if sid in all_words:
             assert all_words[sid] == words
         else:
             all_words[sid] = words
         all_predicate_inds[sid].append(pred_indices)
-        #all_gold_senses[sid].append(gold_senses)
+        all_gold_senses[sid].append(gold_senses)
         all_predicted_senses[sid].append(predicted_sense)
-        all_pos_tags[sid] = pos_tags
-        #all_gold_tags[sid].append(gold_tags)
+        all_gold_tags[sid].append(gold_tags)
         all_predicted_tags[sid].append(predicted_tags)
+        all_pos_tags[sid] = pos_tags
 
     for sid in all_words:
         write_to_conll_2009_eval_file(predict_file, gold_file,
+                                      all_words[sid],
                                       all_predicate_inds[sid],
                                       all_gold_senses[sid],
                                       all_predicted_senses[sid],
-                                      all_words[sid],
                                       all_gold_tags[sid],
                                       all_predicted_tags[sid],
                                       all_pos_tags[sid])
@@ -164,10 +170,12 @@ def evaluate_from_args(args: argparse.Namespace) -> Dict[str, Any]:
     logging.getLogger('allennlp.modules.token_embedders.embedding').setLevel(logging.INFO)
 
     # Load from archive
+    torch.cuda.set_device(args.cuda_device)
     archive = load_archive(args.archive_file, args.cuda_device, args.overrides)
     config = archive.config
     prepare_environment(config)
     model = archive.model
+    model.cuda(args.cuda_device)
     model.eval()
 
     # Load the evaluation data
