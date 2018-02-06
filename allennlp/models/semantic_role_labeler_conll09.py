@@ -68,7 +68,8 @@ class SemanticRoleLabeler(Model):
 
         # For the span based evaluation, we don't want to consider labels
         # for the predicate, because the predicate index is provided to the model.
-        self.conll_metric = ExternalConllEval(vocab, ignore_classes=["V"])
+        lang_string = "base_metric"
+        self.conll_metric = ExternalConllEval(vocab, filename=metric_string, ignore_classes=["V"])
         self.span_metric = SpanBasedF1Measure(vocab, tag_namespace="labels", ignore_classes=["V"])
 
         self.stacked_encoder = stacked_encoder
