@@ -6,3 +6,5 @@ training_config/*
 *.conll
 *.out
 *.err
+*.eval
+*.tar.gz
