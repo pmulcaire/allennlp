@@ -139,8 +139,8 @@ class Trainer:
         self._no_tqdm = no_tqdm
 
         if self._cuda_device >= 0:
-            self._model = self._model.cuda(self._cuda_device)
             torch.cuda.set_device(self._cuda_device)
+            self._model = self._model.cuda(self._cuda_device)
 
         self._log_interval = 10  # seconds
         self._summary_interval = 100  # num batches between logging to tensorboard

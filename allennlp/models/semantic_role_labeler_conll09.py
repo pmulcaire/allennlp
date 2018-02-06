@@ -69,7 +69,7 @@ class SemanticRoleLabeler(Model):
         # For the span based evaluation, we don't want to consider labels
         # for the predicate, because the predicate index is provided to the model.
         self.conll_metric = ExternalConllEval(vocab, ignore_classes=["V"])
-        self.span_metric = SpanBasedF1Measure(vocab, ignore_classes=["V"])
+        self.span_metric = SpanBasedF1Measure(vocab, tag_namespace="labels", ignore_classes=["V"])
 
         self.stacked_encoder = stacked_encoder
         # There are exactly 2 binary features for the predicate embedding.
@@ -162,6 +162,7 @@ class SemanticRoleLabeler(Model):
         output_dict = {"logits": logits, "class_probabilities": class_probabilities}
         if tags is not None and calculate_loss:
             arg_loss = sequence_cross_entropy_with_logits(logits, tags, mask)
+            self.span_metric(class_probabilities, tags, mask)
             output_dict["arg_loss"] = arg_loss
 
         """-------------------------------------------------------------------------------------------------"""
@@ -236,15 +237,16 @@ class SemanticRoleLabeler(Model):
             # combine loss, for backprop interface
             loss = arg_loss + psd_loss
             output_dict["loss"] = loss
-            decode_output = self.decode(output_dict)
             if not self.training:
+                sense_predictions = self.decode_senses(output_dict)['sense']
                 self.conll_metric(token_inds=tokens,
                                   pred_indicators=pred_indicator,
-                                  tags=tags,
+                                  gold_tags=tags,
+                                  tag_probabilities=class_probabilities,
                                   pred_sense_sets=pred_sense_set,
-                                  senses=pred_sense,
-                                  sentence_ids=metadata,
-                                  decode_output=decode_output)
+                                  gold_senses=pred_sense,
+                                  sense_predictions=sense_predictions,
+                                  sentence_ids=metadata)
 
         return output_dict
 
@@ -255,6 +257,11 @@ class SemanticRoleLabeler(Model):
         constraint simply specifies that the output tags must be a valid BIO sequence.  We add a
         ``"tags"`` key to the dictionary with the result.
         """
+        decode_dict = self.decode_tags(output_dict)
+        decode_dict = self.decode_senses(output_dict)
+        return output_dict
+
+    def decode_tags(self, output_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         all_predictions = output_dict['class_probabilities']
         sequence_lengths = get_lengths_from_binary_sequence_mask(output_dict["mask"]).data.tolist()
 
@@ -270,7 +277,9 @@ class SemanticRoleLabeler(Model):
                     for x in max_likelihood_sequence]
             all_tags.append(tags)
         output_dict['tags'] = all_tags
+        return output_dict
 
+    def decode_senses(self, output_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         sense_probabilities = output_dict['psd_probabilities']
         max_prob, indices = torch.max(sense_probabilities,1)
         all_senses = []
@@ -279,12 +288,11 @@ class SemanticRoleLabeler(Model):
             predicted_sense = self.vocab.get_token_from_index(prediction_index, namespace="senses")
             all_senses.append(predicted_sense)
         output_dict['sense'] = all_senses
-
         return output_dict
 
     def get_metrics(self, reset: bool = False):
         metric_dict = {}
-        if self.conll_metric.populated:
+        if self.conll_metric.populated and reset:
             metric_dict = self.conll_metric.get_metric(reset=reset)
         metric_dict2 = self.span_metric.get_metric(reset=reset)
         if "f1-measure-overall" in metric_dict2:
@@ -360,7 +368,7 @@ class SemanticRoleLabeler(Model):
                 copied to that device
         """
         self.dev_id = device_id
-        return super(SemanticRoleLabeler, self).cuda()
+        return super(SemanticRoleLabeler, self).cuda(device_id=self.dev_id)
 
 
 def write_to_conll_2012_eval_file(prediction_file: TextIO,

@@ -71,11 +71,12 @@ class ExternalConllEval(Metric):
     def __call__(self,
                  token_inds,
                  pred_indicators,
-                 tags,
+                 gold_tags,
+                 tag_probabilities,
                  pred_sense_sets,
-                 senses,
-                 sentence_ids,
-                 decode_output: Dict):
+                 gold_senses,
+                 sense_predictions,
+                 sentence_ids):
         """
         Parameters
         ----------
@@ -84,39 +85,44 @@ class ExternalConllEval(Metric):
         self.populated = True
         token_vals = token_inds["tokens"].data
         batch_len = len(token_vals)
+
+        tag_predictions = tag_probabilities.data.max(-1)[1]
         
         for i in range(batch_len):
+
+            sid = sentence_ids[i]['sentence_id']
+            gold_sense = self._sense_vocabulary[gold_senses.data[i,0]]
+            if gold_sense in self.all_gold_senses[sid]:
+                # this instance is a duplicate of one we've seen before
+                # keep the first prediction and discard later ones
+                continue
+
             words = []
             for v in token_vals[i]:
                 if v != 0:
                     word = self._token_vocabulary[v]
                     words.append(word)
             length = len(words)
+            #if sid in self.all_words:
+            #    assert self.all_words[sid] == words
+            #else:
+            self.all_words[sid] = words
 
             pred_indices = list(pred_indicators.data[i])[:length]
 
-            gold_tags = []
-            for v in tags.data[i][:length]:
+            gold_tag_list = []
+            for v in gold_tags.data[i][:length]:
                 tag = 'O'
                 if v != 0: tag = self._tag_vocabulary[v]
-                gold_tags.append(tag)
+                gold_tag_list.append(tag)
 
-            gold_sense = self._sense_vocabulary[senses.data[i,0]]
-
-            predicted_tags = decode_output['tags'][i]
-            predicted_sense = decode_output['sense'][i]
-
-            sid = sentence_ids[i]['sentence_id']
-            if sid in self.all_words:
-                assert self.all_words[sid] == words
-            else:
-                self.all_words[sid] = words
+            tag_strings = [self._tag_vocabulary[t] for t in tag_predictions[i][:length]]
 
             self.all_predicate_inds[sid].append(pred_indices)
             self.all_gold_senses[sid].append(gold_sense)
-            self.all_predicted_senses[sid].append(predicted_sense)
-            self.all_gold_tags[sid].append(gold_tags)
-            self.all_predicted_tags[sid].append(predicted_tags)
+            self.all_predicted_senses[sid].append(sense_predictions[i])
+            self.all_gold_tags[sid].append(gold_tag_list)
+            self.all_predicted_tags[sid].append(tag_strings)
 
 
     def get_metric(self, reset: bool = False):
@@ -158,14 +164,14 @@ class ExternalConllEval(Metric):
             self.reset()
 
         all_metrics = {}
-        try:
-            all_metrics["precision-overall"] = float(precision)
-            all_metrics["recall-overall"] = float(recall)
-            all_metrics["f1-measure-overall"] = float(f1_measure)
-        except:
-            ipy.embed()
-        if float(precision) > 50:
-            ipy.embed()
+        if precision is None or recall is None or f1_measure is None:
+            print("\nERROR: could not read eval file")
+            return all_metrics
+
+        all_metrics["precision-overall"] = float(precision)
+        all_metrics["recall-overall"] = float(recall)
+        all_metrics["f1-measure-overall"] = float(f1_measure)
+
         return all_metrics
 
 
@@ -191,7 +197,7 @@ class ExternalConllEval(Metric):
         self.all_predicted_senses = defaultdict(list)
         self.all_gold_tags = defaultdict(list)
         self.all_predicted_tags = defaultdict(list)
-        self.populated = True
+        self.populated = False
 
 def write_to_conll_2009_eval_file(prediction_file: TextIO,
                                   gold_file: TextIO,
@@ -230,17 +236,21 @@ def write_to_conll_2009_eval_file(prediction_file: TextIO,
     pred_indicators = ["_"] * len(sentence)
 
     predicates_by_idx = {}
+    empty_pred_count = 0
     for i, pred_index_set in enumerate(pred_indices):
-        if len(pred_indices) > 1:
+        if 1 in pred_index_set:
             predicates_by_idx[pred_index_set.index(1)] = i
         else:
-            predicates_by_idx[0] = i
+            empty_pred_count += 1
         for pidx, val in enumerate(pred_index_set):
             if val:
                 pred_only_sentence[pidx] = predicted_senses[i]
                 if len(gold_senses) > 0:
                     gold_only_sentence[pidx] = gold_senses[i]
                 pred_indicators[pidx] = 'Y'
+    if empty_pred_count > 1 or empty_pred_count > 0 and len(predicates_by_idx) > 0:
+        print("Error in printing CoNLL file: Multiple predicates and one or more is empty")
+        ipy.embed()
 
     lines = []
     for idx in range(len(sentence)):
@@ -264,7 +274,10 @@ def write_to_conll_2009_eval_file(prediction_file: TextIO,
                 if '~' in tag:
                     tag = '~'.join(tag.split('~')[:-1])
                 line[14+predicate_num] = '-'.join(tag.split('-')[1:]) # remove the B- from the beginning of the tag
-        prediction_file.write('\t'.join(line)+'\n')
+        try:
+            prediction_file.write('\t'.join(line)+'\n')
+        except:
+            ipy.embed()
         prediction_file.flush()
         lines.append(line)
 
