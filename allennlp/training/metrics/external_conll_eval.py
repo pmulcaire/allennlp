@@ -25,6 +25,7 @@ class ExternalConllEval(Metric):
     """
     def __init__(self,
                  vocabulary: Vocabulary,
+                 filename: str = "metric_",
                  tag_namespace: str = "labels",
                  psd_namespace: str = "senses",
                  ignore_classes: List[str] = None) -> None:
@@ -57,8 +58,8 @@ class ExternalConllEval(Metric):
         self.oov = vocabulary._oov_token
         self._ignore_classes = ignore_classes or []
 
-        self.predict_filename = 'metric_predictions.conll'
-        self.gold_filename = 'metric_gold.conll'
+        self.predict_filename = filename + "predictions.conll"
+        self.gold_filename = filename + "gold.conll"
 
         self.all_words = {}
         self.all_predicate_inds = defaultdict(list)
