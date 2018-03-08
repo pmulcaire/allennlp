@@ -125,6 +125,7 @@ class SrlReader(DatasetReader):
         self._token_indexers = token_indexers or {"tokens": SingleIdTokenIndexer(), "pos_tags": SingleIdTokenIndexer()}
         self.languages = languages
         self.for_training = for_training
+        self.include_empty = True
 
     def _process_sentence(self,
                           sentence_tokens: List[str],
@@ -155,6 +156,9 @@ class SrlReader(DatasetReader):
         pos_tags = [tag for tag in sentence_pos]
         if not predicate_indices:
             # Sentence contains no predicates.
+            if not self.include_empty:
+                # Throw this instance away. A blithe attitude helps with the terror that this will break e v e r y t h i n g
+                return []
             tags = ["O" for _ in sentence_tokens]
             pred_label = [0 for _ in sentence_tokens]
             pred_sense = "_"
@@ -216,6 +220,10 @@ class SrlReader(DatasetReader):
                 if not data_file.endswith("conll"):
                     logger.info("skipping file {} which does not end in .conll".format(data_file))
                     continue
+                #if 'development' in data_file or '.dev' in data_file or 'test' in data_file:
+                #    self.include_empty = True
+                #else:
+                #    self.include_empty = False
                 with codecs.open(os.path.join(root, data_file), 'r', encoding='utf8') as open_file:
                     for line in open_file:
                         line = line.strip()
@@ -235,8 +243,9 @@ class SrlReader(DatasetReader):
                                                                    sentence_count)
                             instances.extend(cur_instances)
                             try:
-                                instance_sid = instances[-1].fields['metadata'].metadata['sentence_id']
-                                assert instance_sid == sentence_count or len(cur_instances) == 0
+                                if len(instances) > 0:
+                                    instance_sid = instances[-1].fields['metadata'].metadata['sentence_id']
+                                    assert instance_sid == sentence_count or len(cur_instances) == 0
                             except:
                                 print("Problem with instance/sentence_id in dataset_readers/semantic_role_labeling_conll09.py")
                                 ipy.embed()
