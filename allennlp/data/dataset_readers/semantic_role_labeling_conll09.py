@@ -264,8 +264,11 @@ class SrlReader(DatasetReader):
                         word = conll_components[1] # 1 for surface form, 3 for predicted lemma
                         lemma = conll_components[2]
                         if not (len(word) > 3 and word[3] == ':'):
-                            word = lang + ':' + word
-                            lemma = lang + ':' + lemma
+                            prefix = lang
+                            if '_' in prefix:
+                                prefix = prefix.split('_')[0]
+                            word = prefix + ':' + word
+                            lemma = prefix + ':' + lemma
                         sentence.append(word)
                         pos_tags.append(conll_components[5]) # use predicted part of speech
                         word_index = len(sentence) - 1

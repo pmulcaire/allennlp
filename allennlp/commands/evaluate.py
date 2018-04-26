@@ -38,7 +38,7 @@ from allennlp.models.archival import load_archive
 from allennlp.models.model import Model
 from allennlp.nn.util import arrays_to_variables
 
-from allennlp.training.metrics.external_conll_eval import write_to_conll_2009_eval_file
+from allennlp.training.metrics.external_conll_eval import write_to_conll_2009_eval_file, write_predicates_to_conll_file
 import IPython as ipy
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
@@ -63,6 +63,9 @@ def add_subparser(parser: argparse._SubParsersAction) -> argparse.ArgumentParser
     subparser.add_argument('--print_predictions',
                            type=str,
                            help='print CoNLL files containing the predicted and labelings to the given path')
+    subparser.add_argument('--print_predicates',
+                           type=str,
+                           help='print CoNLL files containing the predicted predicates (with no labels) to the given path')
     subparser.add_argument('-o', '--overrides',
                            type=str,
                            default="",
@@ -82,8 +85,9 @@ def evaluate(model: Model,
     generator = iterator(dataset, num_epochs=1)
     logger.info("Iterating over dataset")
     generator_tqdm = tqdm.tqdm(generator, total=iterator.get_num_batches(dataset))
-    for batch in generator_tqdm:
+    for batch in generator:
         tensor_batch = arrays_to_variables(batch, cuda_device, for_training=False)
+        print("Run model forward on batch")
         model.forward(**tensor_batch) # stores TP/FN counts for get_metrics as a side-effect
         metrics = model.get_metrics()
         description = ', '.join(["%s: %.2f" % (name, value) for name, value in metrics.items()]) + " ||"
@@ -92,7 +96,7 @@ def evaluate(model: Model,
     return model.get_metrics(reset=True)
 
 
-def evaluate_predict(model: Model,
+def predict_conll(model: Model,
                      dataset: Dataset,
                      iterator: DataIterator,
                      cuda_device: int,
@@ -163,6 +167,42 @@ def evaluate_predict(model: Model,
     return True
 
 
+def predict_predicates(model: Model,
+                     dataset: Dataset,
+                     iterator: DataIterator,
+                     cuda_device: int,
+                     predict_file: TextIO,
+                     gold_file: TextIO) -> Dict[str, Any]:
+    model.eval() #sets the model to evaluation mode--no dropout, batchnorm, other stuff?
+
+    logger.info("Iterating over dataset")
+    generator_tqdm = tqdm.tqdm(dataset.instances, total=len(dataset.instances))
+
+    print("setting up conll output")
+    
+    all_sids = {}
+    for idx, instance in enumerate(generator_tqdm):
+        output = model.forward_on_instance(instance, cuda_device, calculate_loss=False)
+        pred_indices = output['tags']
+        sid = instance.fields['metadata'].metadata['sentence_id']
+        if sid in all_sids:
+            if pred_indices != all_sids[sid][0]:
+                print("Different results for sentence {}".format(sid))
+                ipy.embed()
+        all_sids[sid] = (instance, output)
+        tokens = instance.fields['tokens'].tokens
+        words = [t.text for t in tokens]
+        pos = [t.pos_ for t in tokens]
+        gold_preds = instance.fields['pred_indicator'].labels
+        write_predicates_to_conll_file(predict_file, gold_file,
+                                       words,
+                                       pos,
+                                       pred_indices, gold_preds)
+    print("printed conll output")
+
+    return True
+
+
 def evaluate_from_args(args: argparse.Namespace) -> Dict[str, Any]:
     # Disable some of the more verbose logging statements
     logging.getLogger('allennlp.common.params').disabled = True
@@ -195,7 +235,13 @@ def evaluate_from_args(args: argparse.Namespace) -> Dict[str, Any]:
         predict_filename = args.print_predictions
         predict_file = open(predict_filename, 'w')
         gold_file = open(os.path.join(directory, 'gold.conll'), 'w')
-        predictions = evaluate_predict(model, dataset, iterator, args.cuda_device, predict_file, gold_file)
+        predictions = predict_conll(model, dataset, iterator, args.cuda_device, predict_file, gold_file)
+    if args.print_predicates:
+        directory = os.path.dirname(args.archive_file)
+        predict_filename = args.print_predicates
+        predict_file = open(predict_filename, 'w')
+        gold_file = open(os.path.join(directory, 'gold.conll'), 'w')
+        predictions = predict_predicates(model, dataset, iterator, args.cuda_device, predict_file, gold_file)
 
     logger.info("Finished evaluating.")
     logger.info("Metrics:")

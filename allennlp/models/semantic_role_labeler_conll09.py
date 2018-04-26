@@ -233,10 +233,14 @@ class SemanticRoleLabeler(Model):
 
         if pred_sense is not None and calculate_loss: #i.e. we have a gold answer and can backprop the loss from our predictions
             _, targets = torch.eq(scatter_inds,pred_sense).max(1)
-            psd_loss = F.cross_entropy(psd_logits.view(batch_size, compact_size), targets, size_average=True)
-            output_dict["psd_loss"] = psd_loss
-            # combine loss, for backprop interface
-            loss = arg_loss + psd_loss
+            if compact_size == 1:
+                # only one sense per predicate; psd_loss is 0
+                loss = arg_loss
+            else:
+                psd_loss = F.cross_entropy(psd_logits.view(batch_size, compact_size), targets, size_average=True)
+                output_dict["psd_loss"] = psd_loss
+                # combine loss, for backprop interface
+                loss = arg_loss + psd_loss
             output_dict["loss"] = loss
             if not self.training:
                 sense_predictions = self.decode_senses(output_dict)['sense']

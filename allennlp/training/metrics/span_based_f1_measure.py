@@ -8,6 +8,7 @@ from allennlp.nn.util import get_lengths_from_binary_sequence_mask, ones_like
 from allennlp.data.vocabulary import Vocabulary
 from allennlp.training.metrics.metric import Metric
 
+import IPython as ipy
 
 @Metric.register("span_f1")
 class SpanBasedF1Measure(Metric):
@@ -144,7 +145,10 @@ class SpanBasedF1Measure(Metric):
         active_conll_tag = None
         for index, integer_tag in enumerate(tag_sequence):
             # Actual BIO tag.
-            string_tag = self._label_vocabulary[integer_tag]
+            try:
+                string_tag = self._label_vocabulary[integer_tag]
+            except:
+                ipy.embed()
             bio_tag = string_tag[0]
             conll_tag = string_tag[2:]
             if bio_tag == "O" or conll_tag in self._ignore_classes:

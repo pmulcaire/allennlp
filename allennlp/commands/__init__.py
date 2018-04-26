@@ -18,6 +18,7 @@ DEFAULT_MODELS = {
 DEFAULT_PREDICTORS = {
         'srl': 'semantic-role-labeling',
         'srl09': 'semantic-role-labeling-09',
+        'predid': 'semantic-role-labeling-09',
         'decomposable_attention': 'textual-entailment',
         'bidaf': 'machine-comprehension',
         'simple_tagger': 'simple-tagger',

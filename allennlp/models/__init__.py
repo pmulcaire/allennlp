@@ -11,4 +11,5 @@ from allennlp.models.model import Model
 from allennlp.models.reading_comprehension.bidaf import BidirectionalAttentionFlow
 #from allennlp.models.semantic_role_labeler import SemanticRoleLabeler
 from allennlp.models.semantic_role_labeler_conll09 import SemanticRoleLabeler
+from allennlp.models.predicate_id import PredicateIdentification
 from allennlp.models.simple_tagger import SimpleTagger

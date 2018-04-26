@@ -303,3 +303,57 @@ def write_to_conll_2009_eval_file(prediction_file: TextIO,
     gold_file.write("\n")
 
 
+
+def write_predicates_to_conll_file(prediction_file: TextIO,
+                                   gold_file: TextIO,
+                                   sentence: List[str],
+                                   pos_tags: List[str],
+                                   pred_values: List[str],
+                                   gold_pred_indicator: List[int]):
+    """
+    Prints predicate argument predictions and optionally gold labels for a single 
+    predicate in a sentence to two provided file references.
+
+    Parameters
+    ----------
+    prediction_file : TextIO, required.
+        A file reference to print predictions to.
+    gold_file : TextIO, required.
+        A file reference to print gold labels to.
+    sentence : List[str], required.
+        The word tokens.
+    pos : List[str], required.
+        The part-of-speech tags..
+    pred_values : List[str], required.
+        The values of the FILLPRED column: 'Y' if a predicate, '_' else.
+    """
+    lines = []
+    npreds = len([p for p in pred_values if p=='Y'])
+
+    for idx in range(len(sentence)):
+        word = sentence[idx]
+        line = ["_"] * (14 + npreds)
+        line[0] = str(idx+1)
+        line[1] = word
+        line[2] = word
+        line[3] = word
+
+        postag = pos_tags[idx]
+        line[4] = postag
+        line[5] = postag
+
+        if pred_values[idx] == 'Y':
+            line[12] = pred_values[idx]
+            line[13] = word
+
+        prediction_file.write("\t".join(line)+"\n")
+        prediction_file.flush()
+        lines.append(line)        
+
+    # ignore gold bc there's no way to compare sentences with 
+    # varying numbers of predicates anyway
+
+    prediction_file.write("\n")
+    #gold_file.write("\n")
+
+
