@@ -342,6 +342,9 @@ def write_predicates_to_conll_file(prediction_file: TextIO,
         line[4] = postag
         line[5] = postag
 
+        if ':' in word and len(word.split(':')[0]) == 3:
+            word = ':'.join(word.split(':')[1:])
+
         if pred_values[idx] == 'Y':
             line[12] = pred_values[idx]
             line[13] = word

@@ -449,6 +449,11 @@ class Trainer:
             if is_best:
                 logger.info("Best validation performance so far. "
                             "Copying weights to '%s/best.th'.", self._serialization_dir)
+                for f in os.listdir(self._serialization_dir):
+                    if f[-3:] == ".th" and "best" not in f and "_{}.th".format(epoch) not in f:
+                        rmpath = os.path.join(self._serialization_dir, f)
+                        logger.info('Removing {}'.format(f))
+                        os.remove(rmpath)
                 shutil.copyfile(model_path, os.path.join(self._serialization_dir, "best.th"))
                 with open(os.path.join(self._serialization_dir, "best_so_far.txt"), 'a') as f:
                     f.write("{}\n".format(epoch))

@@ -2374,18 +2374,22 @@ print OUT "  (i.e., predicate identification and classification)\n";
 print OUT "  ----------------+------+---------+--------+------------+---------------|--------|\n";
 print OUT "  PPOSS           | gold | correct | system | recall (%) | precision (%) |     F1 | \n";
 print OUT "  ----------------+------+---------+--------+------------+---------------|--------|\n";
+my ($mtot_corr, $mtot_g, $mtot_s, $mprec, $mrec, $mf1) = (0, 0, 0, 'NaN', 'NaN', 'NaN');
 foreach my $pposs (sort keys %{$srl_counts{prop_per_tag}}) {
     my ($tot_corr, $tot_g, $tot_s, $prec, $rec, $f1) = (0, 0, 0, 'NaN', 'NaN', 'NaN');
 
     if (defined($srl_counts{corl_prop_per_tag}{$pposs})) {
 	$tot_corr = $srl_counts{corl_prop_per_tag}{$pposs};
+	$mtot_corr = $mtot_corr + $srl_counts{corl_prop_per_tag}{$pposs};
     }
     if (defined($srl_counts{pred_prop_per_tag}{$pposs})) {
 	$tot_s = $srl_counts{pred_prop_per_tag}{$pposs};
 	$prec = sprintf("%.2f",$tot_corr / $tot_s * 100);
+	$mtot_s = $mtot_s + $srl_counts{pred_prop_per_tag}{$pposs};
     }
     if(defined($srl_counts{tot_prop_per_tag}{$pposs})){
 	$tot_g = $srl_counts{tot_prop_per_tag}{$pposs};
+	$mtot_g = $mtot_g + $srl_counts{tot_prop_per_tag}{$pposs};
 	$rec = sprintf("%.2f",$tot_corr / $tot_g * 100);
 
 	if(defined($srl_counts{tot_prop_per_tag}{$pposs}) and $prec > 0 and $rec > 0){
@@ -2396,6 +2400,14 @@ foreach my $pposs (sort keys %{$srl_counts{prop_per_tag}}) {
     printf OUT "  %-15s | %4d | %7d | %6d | %10s | %13s | %6s |\n",
     $pposs, $tot_g, $tot_corr, $tot_s, $rec, $prec, $f1;
 }
+$mprec = sprintf("%.2f",$mtot_corr / $mtot_s * 100);
+$mrec = sprintf("%.2f",$mtot_corr / $mtot_g * 100);
+if($mprec > 0 and $mrec > 0){
+    $mf1 = sprintf("%.2f", 2 * $mprec * $mrec / ($mprec + $mrec));
+}
+printf OUT "  %-15s | %4d | %7d | %6d | %10s | %13s | %6s |\n",
+    "Total", $mtot_g, $mtot_corr, $mtot_s, $mrec, $mprec, $mf1;
+
 print OUT "  ----------------+------+---------+--------+------------+---------------|--------|\n\n";
 
 

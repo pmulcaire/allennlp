@@ -97,11 +97,11 @@ def evaluate(model: Model,
 
 
 def predict_conll(model: Model,
-                     dataset: Dataset,
-                     iterator: DataIterator,
-                     cuda_device: int,
-                     predict_file: TextIO,
-                     gold_file: TextIO) -> Dict[str, Any]:
+                  dataset: Dataset,
+                  iterator: DataIterator,
+                  cuda_device: int,
+                  predict_file: TextIO,
+                  gold_file: TextIO) -> Dict[str, Any]:
     model.eval() #sets the model to evaluation mode--no dropout, batchnorm, other stuff?
 
     logger.info("Iterating over dataset")
@@ -137,7 +137,8 @@ def predict_conll(model: Model,
             # not a real predicate sense, because we didn't recognize the predicate
             # guess it with a heuristic
             tok_lemma = instance.fields['pred_sense_set'].index_label
-            predicted_sense = tok_lemma.split(':')[-1] + '.01'
+            predicted_sense = tok_lemma.split(':')[-1]
+            #predicted_sense += '.01'
         if hasattr(instance,'sentence_id'):
             sid = instance.sentence_id
         else:
